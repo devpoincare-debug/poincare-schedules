@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from "react";
 
-// ⚠️ URL de l'API Admin Val Town (sans token)
+// ⚠️ URL de l'API Admin Val Town (SANS TOKEN)
 const API_URL = "https://ahmedelhaddedwk--fdc38ccc3a6c11f1872942b51c65c3df.web.val.run";
 
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
@@ -10,7 +10,7 @@ const START_HOUR = 8;
 const END_HOUR = 21;
 const TOTAL_HOURS = END_HOUR - START_HOUR;
 const HOURS = Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => START_HOUR + i);
-const MAX_ROOMS = 5; // 🔥 LIMITE GLOBALE DE SALLES SIMULTANÉES
+const MAX_ROOMS = 5;
 
 const COLORS: Record<string, string> = {
   "Course": "bg-[#E5F3FF] border-[#0077D4] text-[#0077D4]",
@@ -28,19 +28,66 @@ const DOT_COLORS = [
 ];
 
 const API_TO_FRENCH_DAYS: Record<string, string> = {
-  "Monday": "Lundi", "Tuesday": "Mardi", "Wednesday": "Mercredi",
-  "Thursday": "Jeudi", "Friday": "Vendredi", "Saturday": "Samedi", "Sunday": "Dimanche"
+  "monday": "lundi", "tuesday": "mardi", "wednesday": "mercredi",
+  "thursday": "jeudi", "friday": "vendredi", "saturday": "samedi", "sunday": "dimanche"
 };
 
-function getPositionStyles(startTime: string, endTime: string) {
+// --- Helpers de Formatage ---
+const extractText = (val: any): string => {
+  if (!val) return "";
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'object' && val.value) return String(val.value).trim();
+  if (Array.isArray(val) && val.length > 0 && val[0].value) return String(val[0].value).trim();
+  return String(val).trim();
+};
+
+const parseEuropeanDate = (val: any) => {
+  let str = extractText(val);
+  if (!str || str === "null" || str.toLowerCase() === "à définir") return null;
+  if (str.includes('/')) {
+      const parts = str.split('/');
+      if (parts.length === 3) {
+          const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+          if (!isNaN(d.getTime())) return d;
+      }
+  } else if (str.includes('-')) {
+      const parts = str.split('-');
+      if (parts.length === 3) {
+          const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          if (!isNaN(d.getTime())) return d;
+      }
+  }
+  const d2 = new Date(str);
+  return !isNaN(d2.getTime()) ? d2 : null;
+};
+
+const timeToMinutes = (time: string) => {
+  if (!time) return 0;
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+};
+
+const formatMinutesToTime = (mins: number) => {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+};
+
+function getPositionStyles(startTime: string, endTime: string, isAvail: boolean = false) {
   if (!startTime || !endTime) return { top: "0%", height: "0%" };
-  const [startH, startM] = startTime.split(':').map(Number);
-  const [endH, endM] = endTime.split(':').map(Number);
-  const startInHours = startH + startM / 60;
-  const endInHours = endH + endM / 60;
-  const top = ((startInHours - START_HOUR) / TOTAL_HOURS) * 100; 
-  const height = ((endInHours - startInHours) / TOTAL_HOURS) * 100;
-  return { top: `${top}%`, height: `${height}%` };
+  const s = timeToMinutes(startTime);
+  const e = timeToMinutes(endTime);
+  const top = ((s / 60 - START_HOUR) / TOTAL_HOURS) * 100; 
+  const height = ((e - s) / 60 / TOTAL_HOURS) * 100;
+  
+  const styles: any = { top: `${top}%`, height: `${height}%` };
+  
+  // Style Haché discret pour les disponibilités
+  if (isAvail) {
+      styles.background = "repeating-linear-gradient(45deg, #fafafa, #fafafa 8px, #ffffff 8px, #ffffff 16px)";
+  }
+  
+  return styles;
 }
 
 function formatNotionHour(hour: number) {
@@ -52,8 +99,7 @@ function formatExactTime(date: Date) {
   let hours = date.getHours();
   const minutes = date.getMinutes().toString().padStart(2, '0');
   const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  hours = hours ? hours : 12; 
+  hours = hours % 12 || 12; 
   return `${hours}:${minutes} ${ampm}`;
 }
 
@@ -63,18 +109,6 @@ function formatMonthTime(timeStr: string) {
   const ampm = h >= 12 ? 'PM' : 'AM';
   const hour12 = h % 12 || 12;
   return `${hour12}${m !== 0 ? ':' + m.toString().padStart(2, '0') : ''} ${ampm}`;
-}
-
-function timeToMinutes(time: string) {
-  if (!time) return 0;
-  const [h, m] = time.split(':').map(Number);
-  return h * 60 + m;
-}
-
-function formatMinutesToTime(mins: number) {
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
 }
 
 function generateMiniCalendar(baseMonth: Date, actualToday: Date) {
@@ -93,22 +127,13 @@ function generateMiniCalendar(baseMonth: Date, actualToday: Date) {
 }
 
 const ChevronRight = ({ className }: { className?: string }) => (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-        <polyline points="9 18 15 12 9 6"></polyline>
-    </svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="9 18 15 12 9 6"></polyline></svg>
 );
 
 const MenuItem = ({ label, shortcut, isSelected, onClick, hasSubmenu, onMouseEnter, onMouseLeave }: any) => (
-    <div 
-        onClick={onClick} 
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
-        className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-100 cursor-pointer text-[#37352f] transition-colors"
-    >
+    <div onClick={onClick} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-100 cursor-pointer text-[#37352f] transition-colors">
         <div className="flex items-center gap-2">
-            <div className="w-4 flex justify-center text-gray-800">
-                {isSelected && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
-            </div>
+            <div className="w-4 flex justify-center text-gray-800">{isSelected && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}</div>
             <span>{label}</span>
         </div>
         <div className="flex items-center gap-3">
@@ -137,16 +162,16 @@ export default function AdminDashboard() {
   
   const [isTutorsOpen, setIsTutorsOpen] = useState(true);
   const [isClassesOpen, setIsClassesOpen] = useState(true);
+  const [isAvailOpen, setIsAvailOpen] = useState(true); 
   
   const [selectedTutors, setSelectedTutors] = useState<string[]>([]);
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
-  
-  const [showAvailabilities, setShowAvailabilities] = useState(false);
+  const [selectedAvailTutors, setSelectedAvailTutors] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(API_URL)
       .then(async res => {
-         if (!res.ok) throw new Error(`Erreur API (${res.status}): ${await res.text()}`);
+         if (!res.ok) throw new Error(`Erreur API (${res.status})`);
          return res.json();
       })
       .then(d => { 
@@ -155,7 +180,6 @@ export default function AdminDashboard() {
           setLoading(false); 
       })
       .catch((err) => { 
-          console.error("Fetch error:", err); 
           setErrorMsg(err.message); 
           setLoading(false); 
       });
@@ -175,20 +199,221 @@ export default function AdminDashboard() {
   else if (viewMode.includes('jours')) daysLength = parseInt(viewMode.split(' ')[0]);
 
   const displayDate = new Date(currentTime);
+  displayDate.setHours(0, 0, 0, 0); 
   if (viewMode === 'Semaine') {
-      displayDate.setDate(currentTime.getDate() + (offset * 7));
+      displayDate.setDate(displayDate.getDate() + (offset * 7));
       const day = displayDate.getDay() === 0 ? 6 : displayDate.getDay() - 1;
       displayDate.setDate(displayDate.getDate() - day);
   } else if (viewMode === 'Mois') {
       displayDate.setDate(1); 
-      displayDate.setMonth(currentTime.getMonth() + offset);
+      displayDate.setMonth(displayDate.getMonth() + offset);
   } else {
-      displayDate.setDate(currentTime.getDate() + (offset * daysLength));
+      displayDate.setDate(displayDate.getDate() + (offset * daysLength));
   }
 
   useEffect(() => {
     setMiniCalBaseDate(new Date(displayDate.getFullYear(), displayDate.getMonth(), 1));
   }, [displayDate.getFullYear(), displayDate.getMonth()]);
+
+  const activeDates = useMemo(() => Array.from({ length: daysLength }).map((_, i) => {
+      const d = new Date(displayDate);
+      d.setDate(displayDate.getDate() + i);
+      return d;
+  }), [displayDate.getTime(), daysLength]);
+
+  const getFrenchDayName = (d: Date) => DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+
+  // 🔥 ALGORITHME DYNAMIQUE & SMART PRIORITY AVEC FUSION
+  const processedSchedules = useMemo(() => {
+    if (!data || !data.schedules) return [];
+
+    const events: any[] = [];
+    const minuteCountsByDate: Record<number, number[]> = {};
+
+    // 1. Filtrage Dynamique (Vrais Cours)
+    activeDates.forEach(date => {
+        const timeMs = date.getTime();
+        const dayFr = getFrenchDayName(date).toLowerCase();
+
+        minuteCountsByDate[timeMs] = new Array(1440).fill(0);
+
+        data.schedules.forEach((s: any) => {
+            const rawDay = extractText(s.day).toLowerCase();
+            const sDayFr = API_TO_FRENCH_DAYS[rawDay] || rawDay;
+
+            if (sDayFr === dayFr) {
+                const endD = parseEuropeanDate(s.endDate);
+                if (!endD || date <= endD) {
+                    const evt = {
+                        ...s,
+                        instanceId: `${s.id}-${timeMs}`,
+                        classNameStr: extractText(s.className),
+                        tutorStr: extractText(s.tutor),
+                        typeStr: extractText(s.type),
+                        actualDate: date,
+                        isAvailability: false
+                    };
+                    events.push(evt);
+
+                    const startM = timeToMinutes(evt.startTime);
+                    const endM = timeToMinutes(evt.endTime);
+                    for(let m = startM; m < endM; m++) minuteCountsByDate[timeMs][m]++;
+                }
+            }
+        });
+    });
+
+    // 2. Filtres Utilisateur
+    let filteredEvents = events.filter(c => {
+        const matchT = selectedTutors.length === 0 || selectedTutors.includes(c.tutorStr);
+        const matchC = selectedClasses.length === 0 || selectedClasses.includes(c.classNameStr);
+        const matchS = !searchQuery || c.classNameStr.toLowerCase().includes(searchQuery.toLowerCase()) || c.tutorStr.toLowerCase().includes(searchQuery.toLowerCase());
+        return matchT && matchC && matchS;
+    });
+
+    filteredEvents = filteredEvents.map(c => {
+        const s1 = timeToMinutes(c.startTime);
+        const e1 = timeToMinutes(c.endTime);
+        const isConflicting = filteredEvents.some(other => {
+            if (other.instanceId === c.instanceId) return false;
+            if (other.actualDate.getTime() !== c.actualDate.getTime()) return false;
+            const s2 = timeToMinutes(other.startTime);
+            const e2 = timeToMinutes(other.endTime);
+            return s1 < e2 && e1 > s2;
+        });
+        return { ...c, isConflicting };
+    });
+
+    // 3. Génération Intelligente des Disponibilités (Regroupées)
+    const avails: any[] = [];
+    if (selectedAvailTutors.length > 0 && data.tutorsInfo) {
+        activeDates.forEach(date => {
+            const timeMs = date.getTime();
+            const dayFr = getFrenchDayName(date).toLowerCase();
+            const minuteCounts = minuteCountsByDate[timeMs];
+
+            selectedAvailTutors.forEach(tName => {
+                const profInfo = data.tutorsInfo.find((ti: any) => ti.name === tName);
+                if (!profInfo) return;
+
+                // Règle 1: Jours de repos stricts
+                const isOff = profInfo.daysOff.some((off: string) => {
+                    const offClean = off.trim().toLowerCase();
+                    const enMatch = Object.keys(API_TO_FRENCH_DAYS).find(k => k === offClean && API_TO_FRENCH_DAYS[k] === dayFr);
+                    return offClean === dayFr || !!enMatch;
+                });
+                
+                if (isOff) return;
+
+                // Calcul des tendances horaires
+                const tutorEventsToday = events.filter(e => e.tutorStr === tName && e.actualDate.getTime() === timeMs);
+                let morningMins = 0;
+                let afternoonMins = 0;
+                let eveningMins = 0;
+                let totalMinsWorked = 0;
+
+                tutorEventsToday.forEach(e => {
+                    const sM = timeToMinutes(e.startTime);
+                    const eM = timeToMinutes(e.endTime);
+                    const dur = eM - sM;
+                    totalMinsWorked += dur;
+                    if (sM < 13 * 60) morningMins += dur;
+                    else if (sM < 17 * 60 + 30) afternoonMins += dur;
+                    else eveningMins += dur;
+                });
+
+                let minsRemaining = (profInfo.workingHours * 60) - totalMinsWorked;
+                if (minsRemaining < 60) return;
+
+                const isMorningPref = morningMins >= eveningMins;
+
+                const morningSlots = [
+                    { start: "09:00", end: "10:30", dur: 90 },
+                    { start: "10:30", end: "12:00", dur: 90 },
+                    { start: "11:30", end: "13:00", dur: 90 }
+                ];
+                const afternoonSlots = [
+                    { start: "14:00", end: "15:30", dur: 90 },
+                    { start: "15:30", end: "17:00", dur: 90 }
+                ];
+                const eveningSlots = [
+                    { start: "17:30", end: "19:00", dur: 90 },
+                    { start: "19:00", end: "20:30", dur: 90 }
+                ];
+
+                // L'Intelligence de priorisation
+                let orderedSlots: any[] = [];
+                if (afternoonMins > 0) {
+                    orderedSlots = [...afternoonSlots, ...eveningSlots, ...morningSlots];
+                } else if (!isMorningPref) {
+                    orderedSlots = [...eveningSlots, ...morningSlots, ...afternoonSlots];
+                } else {
+                    orderedSlots = [...morningSlots, ...eveningSlots, ...afternoonSlots];
+                }
+
+                let tempAvails: any[] = [];
+
+                orderedSlots.forEach(slot => {
+                    if (minsRemaining < 60) return;
+                    
+                    let dur = Math.min(minsRemaining, slot.dur);
+                    if (dur >= 90) dur = 90;
+                    else if (dur >= 60) dur = 60;
+                    else return;
+
+                    const sM = timeToMinutes(slot.start);
+                    const eM = sM + dur;
+
+                    const isRoomFull = minuteCounts.slice(sM, eM).some(c => c >= MAX_ROOMS);
+                    const isProfBusy = tutorEventsToday.some(c => {
+                        const cs = timeToMinutes(c.startTime);
+                        const ce = timeToMinutes(c.endTime);
+                        return sM < ce && eM > cs;
+                    });
+                    const isAlreadyAvail = tempAvails.some(a => timeToMinutes(a.startTime) < eM && timeToMinutes(a.endTime) > sM);
+
+                    if (!isRoomFull && !isProfBusy && !isAlreadyAvail) {
+                        tempAvails.push({
+                            tutorStr: tName,
+                            classNameStr: `Disponible`,
+                            typeStr: "Disponibilité",
+                            day: getFrenchDayName(date),
+                            startTime: slot.start,
+                            endTime: formatMinutesToTime(eM),
+                            isAvailability: true,
+                            actualDate: date
+                        });
+                        minsRemaining -= dur;
+                    }
+                });
+
+                // Regroupement des blocs de dispo qui se touchent
+                if (tempAvails.length > 0) {
+                    tempAvails.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+                    let merged = [tempAvails[0]];
+                    
+                    for (let i = 1; i < tempAvails.length; i++) {
+                        let last = merged[merged.length - 1];
+                        let curr = tempAvails[i];
+                        
+                        if (last.endTime === curr.startTime) {
+                            last.endTime = curr.endTime; // Fusion !
+                        } else {
+                            merged.push(curr);
+                        }
+                    }
+                    
+                    merged.forEach((m, idx) => {
+                        m.instanceId = `avail-${tName}-${timeMs}-${idx}`;
+                        avails.push(m);
+                    });
+                }
+            });
+        });
+    }
+
+    return [...filteredEvents, ...avails];
+  }, [data, activeDates, selectedTutors, selectedClasses, selectedAvailTutors, searchQuery]);
 
   if (errorMsg) return (
       <div className="h-screen flex flex-col items-center justify-center bg-red-50 font-sans p-6 text-center">
@@ -201,295 +426,44 @@ export default function AdminDashboard() {
   if (loading) return <div className="h-screen flex items-center justify-center font-sans text-gray-400 italic">Chargement Admin...</div>;
   if (!data || !data.schedules) return <div className="h-screen flex flex-col items-center justify-center gap-2"><span className="text-red-500 font-medium">Erreur de données.</span></div>;
 
-  const rawSchedules = data.schedules || [];
-  
-  const extractText = (val: any): string => {
-    if (!val) return "";
-    if (typeof val === 'string') return val;
-    if (typeof val === 'object' && val.value) return String(val.value);
-    if (Array.isArray(val) && val.length > 0 && val[0].value) return String(val[0].value);
-    return String(val);
-  };
-
-  const parseEuropeanDate = (val: any) => {
-    let str = extractText(val);
-    if (!str || str === "null" || str === "À définir") return null;
-    if (str.includes('/')) {
-        const parts = str.split('/');
-        if (parts.length === 3) {
-            const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-            if (!isNaN(d.getTime())) return d;
-        }
-    }
-    const d2 = new Date(str);
-    if (!isNaN(d2.getTime())) return d2;
-    return null;
-  };
-
   const uniqueClasses = data.classes ? data.classes.filter(Boolean).map(String) : [];
   const uniqueTutors = data.tutors ? data.tutors.filter(Boolean).map(String) : [];
-
-  const toggleTutor = (tutor: string) => setSelectedTutors(prev => prev.includes(tutor) ? prev.filter(t => t !== tutor) : [...prev, tutor]);
-  const toggleClass = (className: string) => setSelectedClasses(prev => prev.includes(className) ? prev.filter(c => c !== className) : [...prev, className]);
-
-  const activeDates = Array.from({ length: daysLength }).map((_, i) => {
-      const d = new Date(displayDate);
-      d.setDate(displayDate.getDate() + i);
-      return d;
-  });
-
-  const getFrenchDayName = (d: Date) => DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
-
-  // 🔥 CALCULATEUR DE DISPONIBILITÉ + GESTION GLOBALE DES SALLES (MAX 5)
-  const availabilities = useMemo(() => {
-    if (!showAvailabilities || !data?.tutorsInfo) return [];
-    const avails: any[] = [];
-    const today = new Date();
-    today.setHours(0,0,0,0);
-
-    // 1. Calcul de l'occupation GLOBALE des salles pour chaque date active
-    const globalOccupancyByDate = new Map();
-    activeDates.forEach(date => {
-        const dateOnly = new Date(date);
-        dateOnly.setHours(0,0,0,0);
-        if (dateOnly < today) return;
-
-        const dayFr = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"][date.getDay()];
-        
-        // Toutes les classes de l'école actives ce jour-là
-        const activeSchedulesToday = rawSchedules.filter((c: any) => {
-            const cDay = API_TO_FRENCH_DAYS[c.day] || c.day;
-            if (cDay !== dayFr) return false;
-            const ed = parseEuropeanDate(c.endDate);
-            if (ed && dateOnly > ed) return false; // Classe terminée
-            return true;
-        });
-
-        // Tableau des minutes pour compter les salles utilisées simultanément
-        const minuteCounts = new Array(24 * 60).fill(0);
-        activeSchedulesToday.forEach((c: any) => {
-            const s = timeToMinutes(c.startTime);
-            const e = timeToMinutes(c.endTime);
-            for (let m = s; m < e; m++) {
-                minuteCounts[m]++;
-            }
-        });
-
-        // Créer des blocs "Occupés" dès qu'on a atteint la limite des 5 salles
-        const occupiedBlocks = [];
-        let startBlock = null;
-        for (let m = START_HOUR * 60; m <= END_HOUR * 60; m++) {
-            if (minuteCounts[m] >= MAX_ROOMS) {
-                if (startBlock === null) startBlock = m;
-            } else {
-                if (startBlock !== null) {
-                    occupiedBlocks.push([startBlock, m]);
-                    startBlock = null;
-                }
-            }
-        }
-        if (startBlock !== null) occupiedBlocks.push([startBlock, END_HOUR * 60]);
-        
-        globalOccupancyByDate.set(dateOnly.getTime(), occupiedBlocks);
-    });
-
-    // 2. Calcul des disponibilités pour chaque enseignant
-    const activeTutorsList = selectedTutors.length > 0 
-        ? data.tutorsInfo.filter((t: any) => selectedTutors.includes(t.name))
-        : data.tutorsInfo;
-
-    activeTutorsList.forEach((tutor: any) => {
-        if (!tutor.workingHours || tutor.workingHours <= 0) return;
-
-        const tutorCourses = rawSchedules.filter((c: any) => extractText(c.tutor) === tutor.name);
-        
-        let maxEndDate = today;
-        let hasClasses = false;
-        tutorCourses.forEach((c: any) => {
-            const ed = parseEuropeanDate(c.endDate);
-            if (ed) {
-                hasClasses = true;
-                if (ed > maxEndDate) maxEndDate = ed;
-            }
-        });
-        if (!hasClasses) return; // Si prof n'a pas de classes, impossible de deviner son maxEndDate
-
-        activeDates.forEach(date => {
-            const dateOnly = new Date(date);
-            dateOnly.setHours(0,0,0,0);
-
-            // Pas de dispo dans le passé ni après la fin de tous ses contrats actuels
-            if (dateOnly < today || dateOnly > maxEndDate) return;
-
-            const dayEn = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][date.getDay()];
-            const dayFr = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"][date.getDay()];
-
-            if (tutor.daysOff.includes(dayEn) || tutor.daysOff.includes(dayFr)) return;
-
-            // Ses cours à LUI aujourd'hui
-            const classesToday = tutorCourses.filter((c: any) => {
-                const cDay = API_TO_FRENCH_DAYS[c.day] || c.day;
-                if (cDay !== dayFr) return false;
-                const ed = parseEuropeanDate(c.endDate);
-                if (ed && dateOnly > ed) return false; 
-                return true;
-            });
-
-            let workedMinutes = 0;
-            const occupied: number[][] = [];
-            classesToday.forEach((c: any) => {
-                const s = timeToMinutes(c.startTime);
-                const e = timeToMinutes(c.endTime);
-                workedMinutes += (e - s);
-                occupied.push([s, e]);
-            });
-
-            // ⚠️ AJOUTER LES BLOCS OÙ LES 5 SALLES SONT PLEINES
-            const globalOccupied = globalOccupancyByDate.get(dateOnly.getTime()) || [];
-            occupied.push(...globalOccupied);
-
-            let remainingMins = (tutor.workingHours * 60) - workedMinutes;
-            if (remainingMins < 60) return; // Ignore les miettes < 1h
-            remainingMins = Math.floor(remainingMins / 60) * 60; // Troncature à l'heure (avantage au prof)
-
-            occupied.sort((a,b) => a[0] - b[0]);
-            const merged: number[][] = [];
-            if (occupied.length > 0) {
-                let curr = [...occupied[0]];
-                for (let i=1; i<occupied.length; i++) {
-                    if (occupied[i][0] <= curr[1]) curr[1] = Math.max(curr[1], occupied[i][1]);
-                    else { merged.push(curr); curr = [...occupied[i]]; }
-                }
-                merged.push(curr);
-            }
-
-            let freeBlocks: number[][] = [];
-            let lastEnd = START_HOUR * 60;
-            merged.forEach(occ => {
-                if (occ[0] > lastEnd) freeBlocks.push([lastEnd, occ[0]]);
-                lastEnd = Math.max(lastEnd, occ[1]);
-            });
-            if (END_HOUR * 60 > lastEnd) freeBlocks.push([lastEnd, END_HOUR * 60]);
-
-            freeBlocks = freeBlocks.filter(b => (b[1] - b[0]) >= 60);
-
-            const finalSlots: any[] = [];
-            const allocate = (prefStart: number, prefEnd: number) => {
-                for (let i=0; i<freeBlocks.length; i++) {
-                    if (remainingMins < 60) break;
-                    let block = freeBlocks[i];
-                    let overlapStart = Math.max(block[0], prefStart);
-                    let overlapEnd = Math.min(block[1], prefEnd);
-                    
-                    if (overlapStart < overlapEnd && (overlapEnd - overlapStart) >= 60) {
-                        let duration = Math.min(overlapEnd - overlapStart, remainingMins);
-                        duration = Math.floor(duration / 60) * 60; 
-                        
-                        if (duration >= 60) {
-                            finalSlots.push({
-                                id: `avail-${tutor.name}-${dateOnly.getTime()}-${overlapStart}`,
-                                tutorStr: tutor.name,
-                                classNameStr: "Disponible",
-                                typeStr: "Disponibilité",
-                                day: dayFr,
-                                startTime: formatMinutesToTime(overlapStart),
-                                endTime: formatMinutesToTime(overlapStart + duration),
-                                isAvailability: true,
-                            });
-                            remainingMins -= duration;
-                            block[0] = overlapStart + duration; 
-                        }
-                    }
-                }
-            };
-
-            allocate(1050, 1230); // Priorité 17h30 - 20h30
-            if (remainingMins >= 60) allocate(START_HOUR * 60, END_HOUR * 60); 
-
-            avails.push(...finalSlots);
-        });
-    });
-    return avails;
-  }, [showAvailabilities, data, activeDates, rawSchedules, selectedTutors]);
-
-  let filteredSchedules = rawSchedules;
-  if (selectedTutors.length > 0 || selectedClasses.length > 0) {
-      filteredSchedules = filteredSchedules.filter((c: any) => {
-          const matchTutor = selectedTutors.length === 0 || selectedTutors.includes(extractText(c.tutor));
-          const matchClass = selectedClasses.length === 0 || selectedClasses.includes(extractText(c.className));
-          return matchTutor && matchClass;
-      });
-  }
-
-  if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filteredSchedules = filteredSchedules.filter((c: any) => 
-          extractText(c.className).toLowerCase().includes(query) || extractText(c.tutor).toLowerCase().includes(query)
-      );
-  }
-
-  const combinedSchedules = [...filteredSchedules.map((course: any) => ({
-    ...course, 
-    classNameStr: extractText(course.className),
-    tutorStr: extractText(course.tutor),
-    typeStr: extractText(course.type),
-    examDateStr: extractText(course.examDate),
-    endDateStr: extractText(course.endDate),
-    isAvailability: false
-  })), ...availabilities];
-
-  const schedules = combinedSchedules.map((course: any) => {
-    const courseStart = timeToMinutes(course.startTime);
-    const courseEnd = timeToMinutes(course.endTime);
-    const isConflicting = course.isAvailability ? false : combinedSchedules.some((other: any) => {
-        if (other.id === course.id || other.isAvailability) return false; 
-        if (other.day !== course.day) return false; 
-        return courseStart < timeToMinutes(other.endTime) && courseEnd > timeToMinutes(other.startTime);
-    });
-    return { ...course, isConflicting };
-  });
 
   const currentHour = currentTime.getHours();
   const showTimeLine = currentHour >= START_HOUR && currentHour < END_HOUR;
   const timeLineTop = ((currentHour + currentTime.getMinutes() / 60 - START_HOUR) / TOTAL_HOURS) * 100;
 
-  const handleMiniCalPrevMonth = () => { const d = new Date(miniCalBaseDate); d.setMonth(d.getMonth() - 1); setMiniCalBaseDate(d); };
-  const handleMiniCalNextMonth = () => { const d = new Date(miniCalBaseDate); d.setMonth(d.getMonth() + 1); setMiniCalBaseDate(d); };
+  const handleMiniCalPrevMonth = () => { const n = new Date(miniCalBaseDate); n.setMonth(n.getMonth() - 1); setMiniCalBaseDate(n); };
+  const handleMiniCalNextMonth = () => { const n = new Date(miniCalBaseDate); n.setMonth(n.getMonth() + 1); setMiniCalBaseDate(n); };
 
   const handleMiniCalDateClick = (clickedDate: Date) => {
     const target = new Date(clickedDate); target.setHours(0, 0, 0, 0);
     const current = new Date(currentTime); current.setHours(0, 0, 0, 0);
+
     if (viewMode === 'Mois') { setOffset((target.getFullYear() - current.getFullYear()) * 12 + (target.getMonth() - current.getMonth())); } 
     else if (viewMode === 'Jour') { setOffset(Math.round((target.getTime() - current.getTime()) / 86400000)); } 
     else if (viewMode === 'Semaine') {
-        const targetMonday = new Date(target); targetMonday.setDate(targetMonday.getDate() - (targetMonday.getDay() === 0 ? 6 : targetMonday.getDay() - 1));
-        const currentMonday = new Date(current); currentMonday.setDate(currentMonday.getDate() - (currentMonday.getDay() === 0 ? 6 : currentMonday.getDay() - 1));
-        setOffset(Math.round((targetMonday.getTime() - currentMonday.getTime()) / 604800000));
+        const tM = new Date(target); tM.setDate(tM.getDate() - (tM.getDay() === 0 ? 6 : tM.getDay() - 1));
+        const cM = new Date(current); cM.setDate(cM.getDate() - (cM.getDay() === 0 ? 6 : cM.getDay() - 1));
+        setOffset(Math.round((tM.getTime() - cM.getTime()) / 604800000));
     } else { setOffset(Math.floor(Math.round((target.getTime() - current.getTime()) / 86400000) / daysLength)); }
   };
 
   const monthDays = viewMode === 'Mois' ? generateMiniCalendar(displayDate, currentTime) : [];
 
   const formatDate = (val: any) => {
-    let str = extractText(val);
-    if (!str || str === "null" || str === "À définir") return "À définir";
+    if (val === undefined || val === null || val === "" || val === "null") return "À définir";
+    let str = String(val);
     if (str.includes('/')) {
         const parts = str.split('/');
-        if (parts.length === 3) { const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0])); if (!isNaN(d.getTime())) return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }); }
+        if (parts.length === 3) {
+            const d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+            if (!isNaN(d.getTime())) return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+        }
     }
     const d2 = new Date(str);
     if (!isNaN(d2.getTime())) return d2.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
     return str; 
-  };
-
-  const getRemainingSessions = (endDateVal: any) => {
-    let str = extractText(endDateVal);
-    if (!str || str === "null" || str === "À définir") return "?";
-    let d;
-    if (str.includes('/')) { const parts = str.split('/'); if (parts.length === 3) d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0])); } 
-    else { d = new Date(str); }
-    if (!d || isNaN(d.getTime())) return "?";
-    return Math.max(0, Math.ceil((d.getTime() - currentTime.getTime()) / 604800000));
   };
 
   return (
@@ -531,11 +505,9 @@ export default function AdminDashboard() {
 
             <div className="mx-4 mb-4 border-t border-gray-200"></div>
 
-            {/* FILTRES ENSEIGNANTS */}
             <div className="px-2 mb-4">
                 <button onClick={() => setIsTutorsOpen(!isTutorsOpen)} className="flex items-center gap-1.5 w-full px-2 py-1 text-[12px] font-semibold text-[#91918e] hover:bg-[#efefed] rounded transition-colors group">
-                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isTutorsOpen ? 'rotate-90' : ''}`} />
-                    Enseignants ({uniqueTutors.length})
+                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isTutorsOpen ? 'rotate-90' : ''}`} /> Enseignants ({uniqueTutors.length})
                 </button>
                 {isTutorsOpen && (
                     <div className="mt-1 flex flex-col space-y-0.5 animate-in fade-in duration-200">
@@ -543,18 +515,18 @@ export default function AdminDashboard() {
                             const isChecked = selectedTutors.includes(tutor);
                             const dotColor = DOT_COLORS[i % DOT_COLORS.length];
                             
-                            const tutorCourses = rawSchedules.filter((c: any) => extractText(c.tutor) === tutor);
+                            const tutorCourses = data.schedules.filter((c: any) => extractText(c.tutor) === tutor);
                             const uniqueClassesCount = new Set(tutorCourses.map((c: any) => extractText(c.className))).size;
                             let tutorHours = 0;
-                            tutorCourses.forEach((c: any) => { if(c.startTime && c.endTime) tutorHours += (timeToMinutes(c.endTime) - timeToMinutes(c.startTime)) / 60; });
+                            tutorCourses.forEach((c: any) => {
+                                if(c.startTime && c.endTime) tutorHours += (timeToMinutes(c.endTime) - timeToMinutes(c.startTime)) / 60;
+                            });
 
                             return (
                                 <div key={tutor} className="flex flex-col mb-1">
                                     <label className="flex items-center gap-2.5 px-2 py-1.5 hover:bg-[#efefed] rounded cursor-pointer group transition-colors select-none">
-                                        <div className="w-4 h-4 rounded border flex items-center justify-center transition-colors" style={{ backgroundColor: isChecked ? dotColor.hex : 'white', borderColor: isChecked ? dotColor.hex : '#d1d5db' }}>
-                                            {isChecked && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
-                                        </div>
-                                        <input type="checkbox" className="hidden" checked={isChecked} onChange={() => toggleTutor(tutor)} />
+                                        <div className="w-4 h-4 rounded border flex items-center justify-center transition-colors" style={{ backgroundColor: isChecked ? dotColor.hex : 'white', borderColor: isChecked ? dotColor.hex : '#d1d5db' }}>{isChecked && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}</div>
+                                        <input type="checkbox" className="hidden" checked={isChecked} onChange={() => setSelectedTutors(prev => prev.includes(tutor) ? prev.filter(t => t !== tutor) : [...prev, tutor])} />
                                         <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: dotColor.hex }}></span>
                                         <span className={`text-[13px] truncate transition-colors ${isChecked ? 'text-[#37352f] font-medium' : 'text-[#37352f]'}`}>{tutor}</span>
                                     </label>
@@ -565,24 +537,9 @@ export default function AdminDashboard() {
                 )}
             </div>
 
-            {/* 🔥 BOUTON MODE DISPONIBILITÉS */}
-            <div className="px-4 mb-5">
-                <label className={`flex items-center justify-between cursor-pointer p-2.5 rounded-lg border transition-all ${showAvailabilities ? 'bg-[#EAF5E9] border-[#2E7D32]/30 text-[#1B5E20]' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'}`}>
-                    <div className="flex items-center gap-2">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                        <span className="text-[12px] font-bold tracking-tight">Disponibilités</span>
-                    </div>
-                    <div className={`relative w-8 h-4 rounded-full transition-colors ${showAvailabilities ? 'bg-[#2E7D32]' : 'bg-gray-300'}`}>
-                        <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${showAvailabilities ? 'translate-x-4' : ''}`}></div>
-                    </div>
-                    <input type="checkbox" className="hidden" checked={showAvailabilities} onChange={() => setShowAvailabilities(!showAvailabilities)} />
-                </label>
-            </div>
-
             <div className="px-2 mb-4">
                 <button onClick={() => setIsClassesOpen(!isClassesOpen)} className="flex items-center gap-1.5 w-full px-2 py-1 text-[12px] font-semibold text-[#91918e] hover:bg-[#efefed] rounded transition-colors group">
-                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isClassesOpen ? 'rotate-90' : ''}`} />
-                    Classes actives ({uniqueClasses.length})
+                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isClassesOpen ? 'rotate-90' : ''}`} /> Classes actives ({uniqueClasses.length})
                 </button>
                 {isClassesOpen && (
                     <div className="mt-1 flex flex-col space-y-0.5 animate-in fade-in duration-200">
@@ -591,10 +548,8 @@ export default function AdminDashboard() {
                             const dotColor = DOT_COLORS[(i + 3) % DOT_COLORS.length];
                             return (
                                 <label key={className} className="flex items-center gap-2.5 px-2 py-1.5 hover:bg-[#efefed] rounded cursor-pointer group transition-colors select-none">
-                                    <div className="w-4 h-4 rounded border flex items-center justify-center transition-colors" style={{ backgroundColor: isChecked ? dotColor.hex : 'white', borderColor: isChecked ? dotColor.hex : '#d1d5db' }}>
-                                        {isChecked && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
-                                    </div>
-                                    <input type="checkbox" className="hidden" checked={isChecked} onChange={() => toggleClass(className)} />
+                                    <div className="w-4 h-4 rounded border flex items-center justify-center transition-colors" style={{ backgroundColor: isChecked ? dotColor.hex : 'white', borderColor: isChecked ? dotColor.hex : '#d1d5db' }}>{isChecked && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}</div>
+                                    <input type="checkbox" className="hidden" checked={isChecked} onChange={() => setSelectedClasses(prev => prev.includes(className) ? prev.filter(c => c !== className) : [...prev, className])} />
                                     <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: dotColor.hex }}></span>
                                     <span className={`text-[13px] truncate transition-colors ${isChecked ? 'text-[#37352f] font-medium' : 'text-[#37352f]'}`}>{className}</span>
                                 </label>
@@ -603,6 +558,29 @@ export default function AdminDashboard() {
                     </div>
                 )}
             </div>
+
+            <div className="px-2 mb-4">
+                <button onClick={() => setIsAvailOpen(!isAvailOpen)} className="flex items-center gap-1.5 w-full px-2 py-1 text-[12px] font-semibold text-[#91918e] hover:bg-[#efefed] rounded transition-colors group">
+                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isAvailOpen ? 'rotate-90' : ''}`} /> Disponibilités Auto
+                </button>
+                {isAvailOpen && (
+                    <div className="mt-1 flex flex-col space-y-0.5 animate-in fade-in duration-200">
+                        {uniqueTutors.map((tutor: string) => {
+                            const isChecked = selectedAvailTutors.includes(tutor);
+                            const dotColor = { hex: '#91918e' }; 
+                            return (
+                                <label key={`avail-${tutor}`} className="flex items-center gap-2.5 px-2 py-1.5 hover:bg-[#efefed] rounded cursor-pointer group transition-colors select-none">
+                                    <div className="w-4 h-4 rounded border flex items-center justify-center transition-colors" style={{ backgroundColor: isChecked ? dotColor.hex : 'white', borderColor: isChecked ? dotColor.hex : '#d1d5db' }}>{isChecked && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}</div>
+                                    <input type="checkbox" className="hidden" checked={isChecked} onChange={() => setSelectedAvailTutors(prev => prev.includes(tutor) ? prev.filter(t => t !== tutor) : [...prev, tutor])} />
+                                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: dotColor.hex }}></span>
+                                    <span className={`text-[13px] truncate transition-colors ${isChecked ? 'text-[#37352f] font-medium' : 'text-[#37352f]'}`}>{tutor}</span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+
         </div>
       </aside>
 
@@ -656,9 +634,8 @@ export default function AdminDashboard() {
                     </div>
                     <div className="grid grid-cols-7 grid-rows-6 flex-1 border-l border-gray-200">
                         {monthDays.map((day, i) => {
-                            const dayName = getFrenchDayName(day.dateObj);
-                            const daySchedules = schedules
-                                .filter((c: any) => API_TO_FRENCH_DAYS[c.day] === dayName || c.day === dayName)
+                            const daySchedules = processedSchedules
+                                .filter((c: any) => c.actualDate.getTime() === day.dateObj.getTime())
                                 .sort((a: any, b: any) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
 
                             return (
@@ -666,18 +643,18 @@ export default function AdminDashboard() {
                                     <div className="flex justify-end px-1 mt-0.5 mb-1"><span className={`text-[12px] font-medium px-1.5 min-w-[24px] h-6 flex items-center justify-center rounded-full ${day.isToday ? 'bg-[#EB5757] text-white' : (day.isCurrentMonth ? 'text-[#37352f]' : 'text-gray-400')}`}>{day.num === 1 ? <span className="capitalize">{day.dateObj.toLocaleDateString('fr-FR', { month: 'short' })} {day.num}</span> : day.num}</span></div>
                                     <div className="flex flex-col gap-[1px] overflow-y-auto custom-scrollbar flex-1 px-0.5 pb-1">
                                         {daySchedules.map((course: any) => {
-                                            const isAvail = course.isAvailability;
-                                            const colorClass = isAvail ? "text-[#4B5563]" : (COLORS[course.typeStr] || COLORS["Default"]);
+                                            if (course.isAvailability) return null; 
+                                            const colorClass = COLORS[course.typeStr] || COLORS["Default"];
                                             const hexMatch = colorClass.match(/text-\[([^\]]+)\]/);
                                             const hexColor = hexMatch ? hexMatch[1] : "#91918e";
                                             
                                             return (
-                                                <div key={course.id} onClick={() => !isAvail && setSelectedCourse(course)} className={`group text-[11px] px-1 py-[2px] rounded-[4px] cursor-pointer transition-colors flex items-center gap-1.5 ${isAvail ? "bg-[#F3F4F6] border border-dashed border-[#9CA3AF]" : "hover:bg-gray-100"}`}>
-                                                    {!isAvail && <div className="w-[3px] h-3.5 rounded-full shrink-0" style={{ backgroundColor: hexColor }}></div>}
+                                                <div key={course.instanceId || course.id} onClick={() => setSelectedCourse(course)} className="group text-[11px] px-1 py-[2px] rounded-[4px] cursor-pointer transition-colors hover:bg-gray-100 flex items-center gap-1.5">
+                                                    <div className="w-[3px] h-3.5 rounded-full shrink-0" style={{ backgroundColor: hexColor }}></div>
                                                     {course.isConflicting && <span className="text-[10px] shrink-0">⚠️</span>}
                                                     <span className="font-semibold shrink-0" style={{ color: hexColor, opacity: 0.85 }}>{formatMonthTime(course.startTime)}</span>
                                                     <span className="font-semibold text-[#37352f] truncate">{course.classNameStr}</span>
-                                                    {!isAvail && <span className="text-[#91918e] truncate shrink-0 ml-1">{course.tutorStr}</span>}
+                                                    <span className="text-[#91918e] truncate shrink-0 ml-1">{course.tutorStr}</span>
                                                 </div>
                                             );
                                         })}
@@ -717,24 +694,20 @@ export default function AdminDashboard() {
 
                             <div className="absolute inset-0 flex">
                                 {activeDates.map((date, index) => {
-                                    const dayName = getFrenchDayName(date);
                                     const isActualToday = date.toDateString() === currentTime.toDateString();
                                     return (
                                         <div key={index} className={`flex-1 border-r border-gray-100 last:border-r-0 relative ${isActualToday ? "bg-[#FFF0F0]/20" : ""}`}>
                                             {isActualToday && showTimeLine && offset === 0 && viewMode === 'Semaine' && <div className="absolute w-2 h-2 rounded-full bg-[#EB5757] z-20 -ml-1" style={{ top: `calc(${timeLineTop}% - 4px)` }} />}
-                                            
-                                            {schedules.filter((c: any) => API_TO_FRENCH_DAYS[c.day] === dayName || c.day === dayName).map((course: any) => {
+                                            {processedSchedules.filter((c: any) => c.actualDate.getTime() === date.getTime()).map((course: any) => {
                                                 const isAvail = course.isAvailability;
-                                                const colorClasses = isAvail 
-                                                    ? "bg-[#F9FAFB]/90 border-[#D1D5DB] text-[#6B7280] border-dashed border-[2px]" 
-                                                    : (course.isConflicting ? "bg-[#FFF0F0] border-[#EB5757] text-[#EB5757] ring-1 ring-[#EB5757] border-l-[4px]" : `border-l-[4px] ${COLORS[course.typeStr] || COLORS["Default"]}`);
-                                                
                                                 return (
-                                                    <div key={course.id} onClick={() => !isAvail && setSelectedCourse(course)} style={getPositionStyles(course.startTime, course.endTime)} className={`absolute inset-x-[2px] p-2 rounded-md overflow-hidden shadow-sm z-20 transition-transform flex flex-col ${isAvail ? '' : 'cursor-pointer hover:scale-[1.02]'} ${colorClasses}`}>
-                                                        <div className={`font-bold ${isAvail ? 'text-[11px]' : 'text-[12px]'} truncate leading-tight mb-0.5 flex items-center gap-1`}>
-                                                            {course.isConflicting && <span>⚠️</span>}
-                                                            {isAvail ? `${course.classNameStr} - ${course.tutorStr}` : course.classNameStr}
-                                                        </div>
+                                                    <div 
+                                                        key={course.instanceId || course.id} 
+                                                        onClick={() => !isAvail && setSelectedCourse(course)} 
+                                                        style={getPositionStyles(course.startTime, course.endTime, isAvail)} 
+                                                        className={`absolute inset-x-[2px] p-2 rounded-[4px] overflow-hidden shadow-sm z-20 transition-transform flex flex-col ${isAvail ? 'cursor-default opacity-90' : `border-l-[4px] cursor-pointer hover:scale-[1.02] ${course.isConflicting ? "bg-[#FFF0F0] border-[#EB5757] text-[#EB5757] ring-1 ring-[#EB5757]" : (COLORS[course.typeStr] || COLORS["Default"])}`}`}
+                                                    >
+                                                        <div className="font-semibold text-[12px] truncate leading-tight mb-0.5 flex items-center gap-1">{course.isConflicting && <span>⚠️</span>}{course.classNameStr}</div>
                                                         <div className="text-[11px] opacity-90 truncate font-medium">{course.startTime} - {course.endTime}</div>
                                                         {!isAvail && <div className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] opacity-80 font-medium truncate"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>{course.tutorStr}</div>}
                                                     </div>
@@ -752,7 +725,7 @@ export default function AdminDashboard() {
       </main>
 
       {/* --- SIDE PEEK (MODALE) --- */}
-      {selectedCourse && !selectedCourse.isAvailability && (
+      {selectedCourse && (
         <>
             <div className="fixed inset-0 bg-black/20 z-[60] transition-opacity" onClick={() => setSelectedCourse(null)} />
             <div className="fixed top-0 right-0 h-full w-full md:w-[450px] bg-white shadow-2xl z-[70] transform transition-transform animate-in slide-in-from-right duration-300 border-l border-[#e5e5e5] flex flex-col font-sans">
@@ -762,9 +735,14 @@ export default function AdminDashboard() {
                 </div>
                 <div className="px-10 pb-10 flex-1 overflow-y-auto custom-scrollbar">
                     <h3 className="text-[32px] font-bold text-[#37352f] mb-6 mt-4 leading-tight flex items-center gap-3">📄 {selectedCourse.classNameStr}</h3>
+                    
                     {selectedCourse.isConflicting && (
-                      <div className="mb-6 bg-[#fffbe6] border border-[#e6c170] rounded-lg p-4 flex gap-3 text-[#7d6023] animate-in fade-in duration-300"><span className="text-2xl mt-0.5">⚠️</span><div><p className="font-semibold text-[14px]">Attention : Conflit d'horaire détecté</p><p className="text-[13px] mt-0.5 opacity-90">Cette séance chevauche une autre séance sur ce même créneau horaire. Ajustez les horaires pour résoudre le conflit.</p></div></div>
+                      <div className="mb-6 bg-[#fffbe6] border border-[#e6c170] rounded-lg p-4 flex gap-3 text-[#7d6023] animate-in fade-in duration-300">
+                        <span className="text-2xl mt-0.5">⚠️</span>
+                        <div><p className="font-semibold text-[14px]">Attention : Conflit d'horaire détecté</p><p className="text-[13px] mt-0.5 opacity-90">Cette séance chevauche une autre séance sur ce même créneau horaire. Ajustez les horaires pour résoudre le conflit.</p></div>
+                      </div>
                     )}
+
                     <div className="flex flex-col gap-2 mb-8 text-[14px]">
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>Enseignant</div><div className="text-[#37352f] font-medium">{selectedCourse.tutorStr}</div></div>
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Horaire</div><div className={`text-[#37352f] ${selectedCourse.isConflicting ? "text-[#EB5757] font-bold" : ""}`}>{selectedCourse.startTime} — {selectedCourse.endTime}</div></div>
