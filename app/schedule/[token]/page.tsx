@@ -7,14 +7,18 @@ import { notFound } from "next/navigation";
 const API_URL = "https://ahmedelhaddedwk--95e089743a3611f1b31342b51c65c3df.web.val.run/";
 
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+const EN_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 const START_HOUR = 8;
 const END_HOUR = 21;
 const TOTAL_HOURS = END_HOUR - START_HOUR;
 const HOURS = Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => START_HOUR + i);
 
+// 🔥 Nouvelle couleur Jaune Moutarde pour les Examens
 const COLORS: Record<string, string> = {
   "Course": "bg-[#E5F3FF] border-[#0077D4] text-[#004A87]",
   "Communication": "bg-[#EAF5E9] border-[#2E7D32] text-[#1B5E20]",
+  "Exam": "bg-[#FEF3C7] border-[#F59E0B] text-[#92400E]", 
   "Default": "bg-[#F3E8FF] border-[#7E22CE] text-[#4C1D95]",
 };
 
@@ -23,7 +27,24 @@ const API_TO_FRENCH_DAYS: Record<string, string> = {
   "Thursday": "Jeudi", "Friday": "Vendredi", "Saturday": "Samedi", "Sunday": "Dimanche"
 };
 
+const API_TO_INDEX: Record<string, number> = {
+  "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6
+};
+
 const getFrenchDayName = (d: Date) => DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
+
+// 🔥 Parsing de date sécurisé
+function parseDateSafely(dateStr: string) {
+    if (!dateStr) return new Date();
+    try {
+        const parts = dateStr.split('T')[0].split('-');
+        if (parts.length === 3) {
+            const [y, m, d] = parts.map(Number);
+            return new Date(y, m - 1, d);
+        }
+    } catch(e) {}
+    return new Date(dateStr);
+}
 
 function getPositionStyles(startTime: string, endTime: string) {
   if (!startTime || !endTime) return { top: "0%", height: "0%" };
@@ -50,7 +71,6 @@ function formatExactTime(date: Date) {
   return `${hours}:${minutes} ${ampm}`;
 }
 
-// 🔥 Nouvelle fonction pour la vue Mois
 function formatMonthTime(timeStr: string) {
   if (!timeStr) return "";
   const [h, m] = timeStr.split(':').map(Number);
@@ -63,6 +83,39 @@ function timeToMinutes(time: string) {
   if (!time) return 0;
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
+}
+
+// 🔥 Logique de filtrage SÉPARÉE
+function isCourseActiveOnDate(course: any, renderedDate: Date) {
+  const d = new Date(renderedDate);
+  d.setHours(0, 0, 0, 0);
+  
+  // Les examens s'affichent uniquement le jour exact de l'examen
+  if (course.isExam && course.examDate) {
+      const ex = new Date(course.examDate);
+      ex.setHours(0, 0, 0, 0);
+      return d.getTime() === ex.getTime();
+  }
+
+  // Si le cours a une date de fin, on le cache une fois cette date dépassée
+  if (course.endDate) {
+      const e = parseDateSafely(course.endDate);
+      e.setHours(0, 0, 0, 0);
+      if (d.getTime() > e.getTime()) {
+          return false;
+      }
+  }
+
+  // Si le cours a une date de début, on le cache avant cette date
+  if (course.startDate) {
+      const s = parseDateSafely(course.startDate);
+      s.setHours(0, 0, 0, 0);
+      if (d.getTime() < s.getTime()) {
+          return false;
+      }
+  }
+
+  return true;
 }
 
 function generateMiniCalendar(baseMonth: Date, actualToday: Date) {
@@ -86,22 +139,21 @@ const ChevronDown = () => (
     </svg>
 );
 
-const MenuItem = ({ label, shortcut, isSelected, onClick, hasSubmenu, onMouseEnter, onMouseLeave }: any) => (
+const MenuItem = ({ label, shortcut, isSelected, onClick, hasSubmenu, isExpanded }: any) => (
     <div 
         onClick={onClick} 
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
         className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-100 cursor-pointer text-[#37352f] transition-colors"
     >
         <div className="flex items-center gap-2">
             <div className="w-4 flex justify-center text-gray-800">
                 {isSelected && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
             </div>
-            <span>{label}</span>
+            <span className="text-[13px]">{label}</span>
         </div>
         <div className="flex items-center gap-3">
             {shortcut && <span className="text-gray-400 text-[11px] font-semibold tracking-wide">{shortcut}</span>}
             {hasSubmenu && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="gray" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>}
+            {isExpanded && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="gray" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>}
         </div>
     </div>
 );
@@ -120,8 +172,9 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
 
   const [viewMode, setViewMode] = useState('Semaine');
   const [offset, setOffset] = useState(0);
+  
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const [numDaysHovered, setNumDaysHovered] = useState(false);
+  const [numDaysExpanded, setNumDaysExpanded] = useState(false);
 
   useEffect(() => {
     fetch(`${API_URL}?token=${token}`)
@@ -136,10 +189,9 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
   }, []);
 
   let daysLength = 7;
-  if (viewMode === 'Jour') daysLength = 1;
+  if (viewMode === 'Jour' || viewMode === "Aujourd'hui") daysLength = 1;
   else if (viewMode.includes('jours')) daysLength = parseInt(viewMode.split(' ')[0]);
 
-  // 🔥 Ajustement de l'affichage pour la vue Mois
   const displayDate = new Date(currentTime);
   if (viewMode === 'Semaine') {
       displayDate.setDate(currentTime.getDate() + (offset * 7));
@@ -165,24 +217,64 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
   };
 
   const rawSchedules = data.schedules || [];
-  
-  const schedules = rawSchedules.map((course: any) => {
-    const courseStart = timeToMinutes(course.startTime);
-    const courseEnd = timeToMinutes(course.endTime);
-    const isConflicting = rawSchedules.some((other: any) => {
-        if (other.id === course.id) return false; 
-        if (other.day !== course.day) return false; 
-        const otherStart = timeToMinutes(other.startTime);
-        const otherEnd = timeToMinutes(other.endTime);
-        return courseStart < otherEnd && courseEnd > otherStart;
-    });
-    return { ...course, isConflicting };
+  let baseSchedules = rawSchedules.map((c: any) => ({ ...c }));
+
+  // 🔥 GÉNÉRATION DE L'EXAMEN EXACTEMENT SELON LA DATE DE BASEROW
+  const classGroups: Record<string, any[]> = {};
+  baseSchedules.forEach(c => {
+      if (!classGroups[c.className]) classGroups[c.className] = [];
+      classGroups[c.className].push(c);
   });
 
+  const examSchedules: any[] = [];
+  Object.keys(classGroups).forEach(className => {
+      const classScheds = classGroups[className];
+      if (classScheds.length === 0) return;
+
+      // 1. On trouve la première session pour copier ses horaires
+      classScheds.sort((a, b) => {
+          const dayA = API_TO_INDEX[a.day] ?? 99;
+          const dayB = API_TO_INDEX[b.day] ?? 99;
+          if (dayA !== dayB) return dayA - dayB;
+          return timeToMinutes(a.startTime) - timeToMinutes(b.startTime);
+      });
+      const firstSession = classScheds[0];
+
+      // 2. On cherche la date d'examen dans n'importe laquelle des sessions de cette classe
+      let examField = null;
+      for (const sched of classScheds) {
+          examField = sched.examDate || sched.ExamDate || sched.exam_date || sched.dateExam || sched.exam;
+          if (examField) break;
+      }
+
+      // 3. Si on a trouvé une date d'examen dans Baserow, on crée le bloc
+      if (examField) {
+          const examDateObj = parseDateSafely(examField);
+          
+          // CRITIQUE : Calculer le jour exact en anglais ("Monday", "Tuesday"...) pour qu'il s'affiche dans la bonne colonne de la semaine
+          const dayIndex = examDateObj.getDay() === 0 ? 6 : examDateObj.getDay() - 1;
+          const correctDayStr = EN_DAYS[dayIndex];
+
+          examSchedules.push({
+              ...firstSession,
+              id: firstSession.id + "_exam",
+              type: "Exam",
+              isExam: true,
+              examDate: examDateObj,
+              day: correctDayStr, // On force le jour de la semaine pour qu'il corresponde à la date de l'examen
+              startTime: firstSession.startTime, // Copie exacte des heures de la première session
+              endTime: firstSession.endTime
+          });
+      }
+  });
+
+  // 🔥 On conserve simplement tous les schedules, les conflits seront calculés localement !
+  const schedules = [...baseSchedules, ...examSchedules];
+
   const uniqueClassesCount = new Set(schedules.map((c: any) => c.className)).size;
-  const totalSessions = schedules.length;
+  const totalSessions = schedules.filter(c => !c.isExam).length;
   let totalHours = 0;
-  schedules.forEach((c: any) => {
+  schedules.filter(c => !c.isExam).forEach((c: any) => {
     if (c.startTime && c.endTime) {
       const [sH, sM] = c.startTime.split(':').map(Number);
       const [eH, eM] = c.endTime.split(':').map(Number);
@@ -214,7 +306,6 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
     setMiniCalBaseDate(newDate);
   };
 
-  // 🔥 Logique de décalage intelligente
   const handleMiniCalDateClick = (clickedDate: Date) => {
     const target = new Date(clickedDate);
     target.setHours(0, 0, 0, 0);
@@ -247,6 +338,8 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
         setOffset(Math.floor(diffDays / daysLength));
     }
   };
+
+  const currentViewLabel = viewMode === 'Jour' && offset === 0 ? "Aujourd'hui" : viewMode;
 
   return (
     <div className="flex h-screen bg-white font-sans text-gray-900 overflow-hidden relative">
@@ -347,55 +440,55 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
             </div>
             
             <div className="flex gap-2 text-[13px] font-medium items-center">
-                <div className="relative">
+                
+                {/* 🔥 SÉLECTEUR DE VUE STYLE NOTION (Unique) */}
+                <div className="relative ml-1">
                     <button 
                         onClick={() => setViewMenuOpen(!viewMenuOpen)}
                         className="flex items-center gap-2 text-gray-700 bg-white px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50 transition-colors shadow-sm"
                     >
-                        {viewMode}
+                        {currentViewLabel}
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     
                     {viewMenuOpen && (
                         <>
-                            <div className="fixed inset-0 z-40" onClick={() => setViewMenuOpen(false)}></div>
+                            <div className="fixed inset-0 z-40" onClick={() => {setViewMenuOpen(false); setNumDaysExpanded(false);}}></div>
                             <div className="absolute top-full mt-2 left-0 md:right-0 md:left-auto w-56 bg-white rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-gray-200 py-1.5 z-50 font-sans text-[13px] animate-in fade-in zoom-in-95 duration-100">
-                                <MenuItem label="Jour" shortcut="1 ou D" isSelected={viewMode === 'Jour'} onClick={() => {setViewMode('Jour'); setOffset(0); setViewMenuOpen(false);}} />
-                                <MenuItem label="Semaine" shortcut="0 ou W" isSelected={viewMode === 'Semaine'} onClick={() => {setViewMode('Semaine'); setOffset(0); setViewMenuOpen(false);}} />
-                                <MenuItem label="Mois" shortcut="M" isSelected={viewMode === 'Mois'} onClick={() => {setViewMode('Mois'); setOffset(0); setViewMenuOpen(false);}} />
+                                <MenuItem label="Aujourd'hui" shortcut="T" isSelected={viewMode === 'Jour' && offset === 0} onClick={() => {setViewMode('Jour'); setOffset(0); setViewMenuOpen(false); setNumDaysExpanded(false);}} />
+                                <MenuItem label="Semaine" shortcut="W" isSelected={viewMode === 'Semaine'} onClick={() => {setViewMode('Semaine'); setViewMenuOpen(false); setNumDaysExpanded(false);}} />
+                                <MenuItem label="Mois" shortcut="M" isSelected={viewMode === 'Mois'} onClick={() => {setViewMode('Mois'); setViewMenuOpen(false); setNumDaysExpanded(false);}} />
                                 
                                 <div className="h-px bg-gray-200 my-1 mx-3"></div>
                                 
-                                <div className="relative group" onMouseEnter={() => setNumDaysHovered(true)} onMouseLeave={() => setNumDaysHovered(false)}>
-                                    <MenuItem label="Nombre de jours" hasSubmenu={true} isSelected={viewMode.includes('jours')} onClick={() => {}} />
-                                    
-                                    {numDaysHovered && (
-                                        <div className="absolute top-0 right-full h-full w-2 bg-transparent z-50"></div>
-                                    )}
-
-                                    {numDaysHovered && (
-                                        <div className="absolute top-0 right-full mr-1 w-48 bg-white rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-gray-200 py-1.5 animate-in fade-in slide-in-from-right-2 duration-100 z-50">
-                                            {[2,3,4,5,6,7,8,9].map(n => (
-                                                <MenuItem key={n} label={`${n} jours`} shortcut={`${n}`} isSelected={viewMode === `${n} jours`} onClick={() => {setViewMode(`${n} jours`); setOffset(0); setViewMenuOpen(false); setNumDaysHovered(false);}} />
-                                            ))}
-                                            <div className="h-px bg-gray-200 my-1 mx-3"></div>
-                                            <MenuItem label="Autre..." isSelected={false} onClick={() => { setViewMenuOpen(false); setNumDaysHovered(false); }} />
-                                        </div>
-                                    )}
-                                </div>
+                                <MenuItem 
+                                    label="Nombre de jours" 
+                                    hasSubmenu={!numDaysExpanded} 
+                                    isExpanded={numDaysExpanded}
+                                    isSelected={viewMode.includes('jours')} 
+                                    onClick={() => setNumDaysExpanded(!numDaysExpanded)} 
+                                />
+                                
+                                {numDaysExpanded && (
+                                    <div className="bg-gray-50/50 py-1 border-y border-gray-100 mt-1 animate-in slide-in-from-top-1 duration-150">
+                                        {[2,3,4,5,6,7].map(n => (
+                                            <div 
+                                                key={n}
+                                                onClick={() => {setViewMode(`${n} jours`); setOffset(0); setViewMenuOpen(false); setNumDaysExpanded(false);}}
+                                                className="flex items-center justify-between px-8 py-1.5 hover:bg-gray-100 cursor-pointer text-[13px] text-gray-600 transition-colors"
+                                            >
+                                                <span>{n} jours</span>
+                                                {viewMode === `${n} jours` && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}
                 </div>
 
-                <button 
-                  onClick={() => { setOffset(0); setViewMode('Semaine'); }} 
-                  className="text-gray-700 bg-white px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50 transition-colors shadow-sm"
-                >
-                    Aujourd'hui
-                </button>
-
-                <div className="flex items-center text-gray-700 bg-white rounded border border-gray-200 overflow-hidden shadow-sm">
+                <div className="flex items-center text-gray-700 bg-white rounded border border-gray-200 overflow-hidden shadow-sm ml-2">
                     <button onClick={() => setOffset(p => p - 1)} className="px-2 py-1.5 hover:bg-gray-100 border-r border-gray-200 transition-colors">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
                     </button>
@@ -420,9 +513,22 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                     <div className="grid grid-cols-7 grid-rows-6 flex-1 border-l border-gray-200">
                         {monthDays.map((day, i) => {
                             const dayName = getFrenchDayName(day.dateObj);
+                            
                             const daySchedules = schedules
-                                .filter((c: any) => API_TO_FRENCH_DAYS[c.day] === dayName)
+                                .filter((c: any) => API_TO_FRENCH_DAYS[c.day] === dayName && isCourseActiveOnDate(c, day.dateObj))
                                 .sort((a: any, b: any) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+
+                            // 🔥 Calcul des conflits de manière locale (Mois)
+                            daySchedules.forEach((course: any) => {
+                                const start = timeToMinutes(course.startTime);
+                                const end = timeToMinutes(course.endTime);
+                                course.isConflicting = daySchedules.some((other: any) => {
+                                    if (other.id === course.id) return false;
+                                    const otherStart = timeToMinutes(other.startTime);
+                                    const otherEnd = timeToMinutes(other.endTime);
+                                    return start < otherEnd && end > otherStart;
+                                });
+                            });
 
                             return (
                                 <div key={i} className={`border-b border-r border-gray-200 p-1 flex flex-col gap-0.5 overflow-hidden ${!day.isCurrentMonth ? 'bg-gray-50/40' : 'bg-white'}`}>
@@ -444,12 +550,12 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                                                     className="group text-[11px] px-1 py-[2px] rounded-[4px] cursor-pointer transition-colors hover:bg-gray-100 flex items-center gap-1.5"
                                                 >
                                                     <div className="w-[3px] h-3.5 rounded-full shrink-0" style={{ backgroundColor: hexColor }}></div>
-                                                    {course.isConflicting && <span className="text-[10px] shrink-0">⚠️</span>}
+                                                    {course.isConflicting && !course.isExam && <span className="text-[10px] shrink-0">⚠️</span>}
                                                     <span className="font-semibold shrink-0" style={{ color: hexColor, opacity: 0.85 }}>
                                                         {formatMonthTime(course.startTime)}
                                                     </span>
                                                     <span className="font-semibold text-[#37352f] truncate">
-                                                        {course.className}
+                                                        {course.className} {course.isExam && "— Examen"}
                                                     </span>
                                                 </div>
                                             );
@@ -475,7 +581,7 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                                     {formatNotionHour(h)}
                                 </div>
                             ))}
-                            {showTimeLine && offset === 0 && viewMode === 'Semaine' && (
+                            {showTimeLine && offset === 0 && (viewMode === 'Semaine' || viewMode === 'Jour' || viewMode === "Aujourd'hui") && (
                                 <div className="absolute w-full text-right pr-1 -translate-y-1/2 z-30" style={{ top: `${timeLineTop}%` }}>
                                     <span className="bg-[#EB5757] text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm">
                                         {formatExactTime(currentTime)}
@@ -516,7 +622,7 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                                 />
                             ))}
                             
-                            {showTimeLine && offset === 0 && viewMode === 'Semaine' && (
+                            {showTimeLine && offset === 0 && (viewMode === 'Semaine' || viewMode === 'Jour' || viewMode === "Aujourd'hui") && (
                                 <div 
                                     className="absolute w-full border-b border-[#EB5757] z-10 opacity-50" 
                                     style={{ top: `${timeLineTop}%` }} 
@@ -528,30 +634,72 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                                     const dayName = getFrenchDayName(date);
                                     const isActualToday = date.toDateString() === currentTime.toDateString();
                                     
+                                    const dailyCourses = schedules
+                                        .filter((c: any) => API_TO_FRENCH_DAYS[c.day] === dayName && isCourseActiveOnDate(c, date))
+                                        .sort((a: any, b: any) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+                                    
+                                    const columns: any[][] = [];
+                                    dailyCourses.forEach((course: any) => {
+                                        const start = timeToMinutes(course.startTime);
+                                        const end = timeToMinutes(course.endTime);
+
+                                        // 🔥 Calcul des conflits de manière locale (Jour/Semaine)
+                                        course.isConflicting = dailyCourses.some((other: any) => {
+                                            if (other.id === course.id) return false;
+                                            const otherStart = timeToMinutes(other.startTime);
+                                            const otherEnd = timeToMinutes(other.endTime);
+                                            return start < otherEnd && end > otherStart;
+                                        });
+
+                                        let placed = false;
+                                        for (let i = 0; i < columns.length; i++) {
+                                            const lastEvent = columns[i][columns[i].length - 1];
+                                            if (timeToMinutes(lastEvent.endTime) <= start) {
+                                                columns[i].push(course);
+                                                course.columnIndex = i;
+                                                placed = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!placed) {
+                                            course.columnIndex = columns.length;
+                                            columns.push([course]);
+                                        }
+                                    });
+                                    const numColumns = columns.length || 1;
+
                                     return (
                                         <div key={index} className={`flex-1 border-r border-gray-100 last:border-r-0 relative ${isActualToday ? "bg-[#FFF0F0]/20" : ""}`}>
-                                            {isActualToday && showTimeLine && offset === 0 && viewMode === 'Semaine' && (
+                                            {isActualToday && showTimeLine && offset === 0 && (viewMode === 'Semaine' || viewMode === 'Jour' || viewMode === "Aujourd'hui") && (
                                                 <div className="absolute w-2 h-2 rounded-full bg-[#EB5757] z-20 -ml-1" style={{ top: `calc(${timeLineTop}% - 4px)` }} />
                                             )}
                                             
-                                            {schedules.filter((c: any) => API_TO_FRENCH_DAYS[c.day] === dayName).map((course: any) => (
-                                                <div 
-                                                    key={course.id} 
-                                                    onClick={() => setSelectedCourse(course)}
-                                                    style={getPositionStyles(course.startTime, course.endTime)} 
-                                                    className={`absolute inset-x-[2px] p-2 rounded-md border-l-[4px] text-[11px] overflow-hidden shadow-sm z-20 cursor-pointer transition-transform hover:scale-[1.02] flex flex-col ${
-                                                        course.isConflicting 
-                                                            ? "bg-[#FFF0F0] border-[#EB5757] text-[#EB5757] ring-1 ring-[#EB5757]" 
-                                                            : (COLORS[course.type] || COLORS["Default"])
-                                                    }`}
-                                                >
-                                                    <div className="font-semibold text-[12px] truncate leading-tight mb-0.5 flex items-center gap-1">
-                                                        {course.isConflicting && <span title="Conflit d'horaire">⚠️</span>}
-                                                        {course.className}
+                                            {dailyCourses.map((course: any) => {
+                                                const widthPct = 100 / numColumns;
+                                                const leftPct = (course.columnIndex || 0) * widthPct;
+                                                const pos = getPositionStyles(course.startTime, course.endTime);
+
+                                                return (
+                                                    <div 
+                                                        key={course.id} 
+                                                        onClick={() => setSelectedCourse(course)}
+                                                        style={{ ...pos, left: `${leftPct}%`, width: `calc(${widthPct}% - 2px)` }} 
+                                                        className={`absolute p-2 rounded-md border-l-[4px] text-[11px] overflow-hidden shadow-sm z-20 cursor-pointer transition-transform hover:scale-[1.02] flex flex-col ${
+                                                            course.isConflicting && !course.isExam
+                                                                ? "bg-[#FFF0F0] border-[#EB5757] text-[#EB5757] ring-1 ring-[#EB5757]" 
+                                                                : (COLORS[course.type] || COLORS["Default"])
+                                                        }`}
+                                                    >
+                                                        <div className="font-semibold text-[12px] truncate leading-tight mb-0.5 flex items-center gap-1">
+                                                            {course.isConflicting && !course.isExam && <span title="Conflit d'horaire">⚠️</span>}
+                                                            {course.className}
+                                                        </div>
+                                                        <div className="opacity-90 font-medium text-[11px] truncate">
+                                                            {course.startTime} - {course.endTime} {course.isExam && "• Examen"}
+                                                        </div>
                                                     </div>
-                                                    <div className="opacity-90 font-medium text-[11px] truncate">{course.startTime} - {course.endTime}</div>
-                                                </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
                                     )
                                 })}
@@ -576,7 +724,7 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                     <button onClick={() => setSelectedCourse(null)} className="p-1.5 hover:bg-[#efefed] rounded text-[#91918e] transition-colors">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
-                    {selectedCourse.isConflicting && (
+                    {selectedCourse.isConflicting && !selectedCourse.isExam && (
                         <div className="text-[12px] font-medium text-[#EB5757] flex items-center gap-1.5 bg-[#FFF0F0] px-3 py-1 rounded-full border border-[#EB5757]/20">
                             ⚠️ Conflit d'horaire détecté
                         </div>
@@ -586,10 +734,10 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                 <div className="px-10 pb-10 flex-1 overflow-y-auto custom-scrollbar">
                     
                     <h3 className="text-[32px] font-bold text-[#37352f] mb-6 mt-4 leading-tight flex items-center gap-3">
-                        📄 {selectedCourse.className}
+                        📄 {selectedCourse.className} {selectedCourse.isExam && "(Examen)"}
                     </h3>
 
-                    {selectedCourse.isConflicting && (
+                    {selectedCourse.isConflicting && !selectedCourse.isExam && (
                       <div className="mb-6 bg-[#fffbe6] border border-[#e6c170] rounded-lg p-4 flex gap-3 text-[#7d6023] animate-in fade-in duration-300">
                         <span className="text-2xl mt-0.5">⚠️</span>
                         <div>
@@ -605,7 +753,7 @@ export default function SchedulePage({ params }: { params: Promise<{ token: stri
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                                 Horaire
                             </div>
-                            <div className={`text-[#37352f] ${selectedCourse.isConflicting ? "text-[#EB5757] font-bold" : ""}`}>
+                            <div className={`text-[#37352f] ${selectedCourse.isConflicting && !selectedCourse.isExam ? "text-[#EB5757] font-bold" : ""}`}>
                                 {selectedCourse.startTime} — {selectedCourse.endTime}
                             </div>
                         </div>

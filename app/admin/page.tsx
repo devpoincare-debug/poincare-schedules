@@ -6,6 +6,8 @@ import { useEffect, useState, useRef, useMemo } from "react";
 const API_URL = "https://ahmedelhaddedwk--fdc38ccc3a6c11f1872942b51c65c3df.web.val.run";
 
 const DAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+const EN_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 const START_HOUR = 8;
 const END_HOUR = 21;
 const TOTAL_HOURS = END_HOUR - START_HOUR;
@@ -15,6 +17,7 @@ const MAX_ROOMS = 5;
 const COLORS: Record<string, string> = {
   "Course": "bg-[#E5F3FF] border-[#0077D4] text-[#0077D4]",
   "Communication": "bg-[#EAF5E9] border-[#2E7D32] text-[#2E7D32]",
+  "Exam": "bg-[#FEF3C7] border-[#F59E0B] text-[#92400E]", 
   "Default": "bg-[#F3E8FF] border-[#7E22CE] text-[#7E22CE]",
 };
 
@@ -30,6 +33,10 @@ const DOT_COLORS = [
 const API_TO_FRENCH_DAYS: Record<string, string> = {
   "monday": "lundi", "tuesday": "mardi", "wednesday": "mercredi",
   "thursday": "jeudi", "friday": "vendredi", "saturday": "samedi", "sunday": "dimanche"
+};
+
+const API_TO_INDEX: Record<string, number> = {
+  "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6
 };
 
 // --- Helpers de Formatage ---
@@ -51,7 +58,7 @@ const parseEuropeanDate = (val: any) => {
           if (!isNaN(d.getTime())) return d;
       }
   } else if (str.includes('-')) {
-      const parts = str.split('-');
+      const parts = str.split('T')[0].split('-');
       if (parts.length === 3) {
           const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
           if (!isNaN(d.getTime())) return d;
@@ -126,6 +133,19 @@ function generateMiniCalendar(baseMonth: Date, actualToday: Date) {
   return days;
 }
 
+// 🔥 Calcul des séances restantes
+const getRemainingSessions = (endDateStr: any) => {
+    const endD = parseEuropeanDate(endDateStr);
+    if (!endD) return 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (today > endD) return 0;
+    
+    const diffTime = Math.abs(endD.getTime() - today.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return Math.ceil(diffDays / 7);
+};
+
 const ChevronRight = ({ className }: { className?: string }) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="9 18 15 12 9 6"></polyline></svg>
 );
@@ -195,7 +215,7 @@ export default function AdminDashboard() {
   }, [isSearchActive]);
 
   let daysLength = 7;
-  if (viewMode === 'Jour') daysLength = 1;
+  if (viewMode === 'Jour' || viewMode === "Aujourd'hui") daysLength = 1;
   else if (viewMode.includes('jours')) daysLength = parseInt(viewMode.split(' ')[0]);
 
   const displayDate = new Date(currentTime);
@@ -223,33 +243,97 @@ export default function AdminDashboard() {
 
   const getFrenchDayName = (d: Date) => DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1];
 
-  // 🔥 ALGORITHME DYNAMIQUE & SMART PRIORITY AVEC FUSION
   const processedSchedules = useMemo(() => {
     if (!data || !data.schedules) return [];
 
     const events: any[] = [];
     const minuteCountsByDate: Record<number, number[]> = {};
 
-    // 1. Filtrage Dynamique (Vrais Cours)
+    const cleanScheds = data.schedules.map((s: any) => ({
+        ...s,
+        classNameStr: extractText(s.className),
+        tutorStr: extractText(s.tutor),
+        typeStr: extractText(s.type),
+        examDateStr: extractText(s.examDate || s.ExamDate || s.exam_date || s.dateExam),
+        endDateStr: extractText(s.endDate),
+        startDateStr: extractText(s.startDate),
+        dayStr: extractText(s.day).toLowerCase()
+    }));
+
+    const classGroups: Record<string, any[]> = {};
+    cleanScheds.forEach((c: any) => {
+        if (!classGroups[c.classNameStr]) classGroups[c.classNameStr] = [];
+        classGroups[c.classNameStr].push(c);
+    });
+
+    const examSchedules: any[] = [];
+    Object.keys(classGroups).forEach(className => {
+        const classScheds = classGroups[className];
+        if (classScheds.length === 0) return;
+
+        classScheds.sort((a, b) => {
+            const dayA = API_TO_INDEX[a.dayStr] ?? 99;
+            const dayB = API_TO_INDEX[b.dayStr] ?? 99;
+            if (dayA !== dayB) return dayA - dayB;
+            return timeToMinutes(a.startTime) - timeToMinutes(b.startTime);
+        });
+        const firstSession = classScheds[0];
+
+        let examField = null;
+        for (const sched of classScheds) {
+            examField = sched.examDateStr;
+            if (examField && examField !== "null" && examField !== "À définir" && examField !== "") break;
+        }
+
+        if (examField && examField !== "null" && examField !== "À définir" && examField !== "") {
+            const examDateObj = parseEuropeanDate(examField);
+            if (examDateObj) {
+                const dayIndex = examDateObj.getDay() === 0 ? 6 : examDateObj.getDay() - 1;
+                const correctDayStr = Object.keys(API_TO_FRENCH_DAYS).find(key => API_TO_INDEX[key] === dayIndex) || "";
+                
+                examSchedules.push({
+                    ...firstSession,
+                    id: firstSession.id + "_exam",
+                    typeStr: "Exam",
+                    isExam: true,
+                    examDateObj: examDateObj,
+                    dayStr: correctDayStr,
+                    startTime: firstSession.startTime,
+                    endTime: firstSession.endTime
+                });
+            }
+        }
+    });
+
+    const allGlobalSchedules = [...cleanScheds, ...examSchedules];
+
     activeDates.forEach(date => {
         const timeMs = date.getTime();
         const dayFr = getFrenchDayName(date).toLowerCase();
 
         minuteCountsByDate[timeMs] = new Array(1440).fill(0);
 
-        data.schedules.forEach((s: any) => {
-            const rawDay = extractText(s.day).toLowerCase();
-            const sDayFr = API_TO_FRENCH_DAYS[rawDay] || rawDay;
+        allGlobalSchedules.forEach((s: any) => {
+            const sDayFr = API_TO_FRENCH_DAYS[s.dayStr] || s.dayStr;
 
             if (sDayFr === dayFr) {
-                const endD = parseEuropeanDate(s.endDate);
-                if (!endD || date <= endD) {
+                let isValidDate = true;
+
+                if (s.isExam && s.examDateObj) {
+                    const ex = new Date(s.examDateObj);
+                    ex.setHours(0,0,0,0);
+                    isValidDate = date.getTime() === ex.getTime();
+                } else {
+                    const endD = parseEuropeanDate(s.endDateStr);
+                    const startD = parseEuropeanDate(s.startDateStr);
+                    if (endD && date > endD) isValidDate = false;
+                    if (startD && date < startD) isValidDate = false;
+                }
+
+                if (isValidDate) {
                     const evt = {
                         ...s,
                         instanceId: `${s.id}-${timeMs}`,
-                        classNameStr: extractText(s.className),
-                        tutorStr: extractText(s.tutor),
-                        typeStr: extractText(s.type),
                         actualDate: date,
                         isAvailability: false
                     };
@@ -263,7 +347,6 @@ export default function AdminDashboard() {
         });
     });
 
-    // 2. Filtres Utilisateur
     let filteredEvents = events.filter(c => {
         const matchT = selectedTutors.length === 0 || selectedTutors.includes(c.tutorStr);
         const matchC = selectedClasses.length === 0 || selectedClasses.includes(c.classNameStr);
@@ -271,20 +354,48 @@ export default function AdminDashboard() {
         return matchT && matchC && matchS;
     });
 
-    filteredEvents = filteredEvents.map(c => {
-        const s1 = timeToMinutes(c.startTime);
-        const e1 = timeToMinutes(c.endTime);
-        const isConflicting = filteredEvents.some(other => {
-            if (other.instanceId === c.instanceId) return false;
-            if (other.actualDate.getTime() !== c.actualDate.getTime()) return false;
-            const s2 = timeToMinutes(other.startTime);
-            const e2 = timeToMinutes(other.endTime);
-            return s1 < e2 && e1 > s2;
+    const finalEvents: any[] = [];
+    activeDates.forEach(date => {
+        const dailyEvents = filteredEvents
+            .filter(e => e.actualDate.getTime() === date.getTime())
+            .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+        
+        const columns: any[][] = [];
+        
+        dailyEvents.forEach(course => {
+            const start = timeToMinutes(course.startTime);
+            const end = timeToMinutes(course.endTime);
+            
+            course.isConflicting = dailyEvents.some(other => {
+                if (other.instanceId === course.instanceId) return false;
+                const otherStart = timeToMinutes(other.startTime);
+                const otherEnd = timeToMinutes(other.endTime);
+                return start < otherEnd && end > otherStart;
+            });
+
+            let placed = false;
+            for (let i = 0; i < columns.length; i++) {
+                const lastEvent = columns[i][columns[i].length - 1];
+                if (timeToMinutes(lastEvent.endTime) <= start) {
+                    columns[i].push(course);
+                    course.columnIndex = i;
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed) {
+                course.columnIndex = columns.length;
+                columns.push([course]);
+            }
         });
-        return { ...c, isConflicting };
+        
+        const numColumns = columns.length || 1;
+        dailyEvents.forEach(e => {
+            e.numColumns = numColumns;
+            finalEvents.push(e);
+        });
     });
 
-    // 3. Génération Intelligente des Disponibilités (Regroupées)
     const avails: any[] = [];
     if (selectedAvailTutors.length > 0 && data.tutorsInfo) {
         activeDates.forEach(date => {
@@ -296,7 +407,6 @@ export default function AdminDashboard() {
                 const profInfo = data.tutorsInfo.find((ti: any) => ti.name === tName);
                 if (!profInfo) return;
 
-                // Règle 1: Jours de repos stricts
                 const isOff = profInfo.daysOff.some((off: string) => {
                     const offClean = off.trim().toLowerCase();
                     const enMatch = Object.keys(API_TO_FRENCH_DAYS).find(k => k === offClean && API_TO_FRENCH_DAYS[k] === dayFr);
@@ -305,7 +415,6 @@ export default function AdminDashboard() {
                 
                 if (isOff) return;
 
-                // Calcul des tendances horaires
                 const tutorEventsToday = events.filter(e => e.tutorStr === tName && e.actualDate.getTime() === timeMs);
                 let morningMins = 0;
                 let afternoonMins = 0;
@@ -327,29 +436,14 @@ export default function AdminDashboard() {
 
                 const isMorningPref = morningMins >= eveningMins;
 
-                const morningSlots = [
-                    { start: "09:00", end: "10:30", dur: 90 },
-                    { start: "10:30", end: "12:00", dur: 90 },
-                    { start: "11:30", end: "13:00", dur: 90 }
-                ];
-                const afternoonSlots = [
-                    { start: "14:00", end: "15:30", dur: 90 },
-                    { start: "15:30", end: "17:00", dur: 90 }
-                ];
-                const eveningSlots = [
-                    { start: "17:30", end: "19:00", dur: 90 },
-                    { start: "19:00", end: "20:30", dur: 90 }
-                ];
+                const morningSlots = [{ start: "09:00", end: "10:30", dur: 90 }, { start: "10:30", end: "12:00", dur: 90 }, { start: "11:30", end: "13:00", dur: 90 }];
+                const afternoonSlots = [{ start: "14:00", end: "15:30", dur: 90 }, { start: "15:30", end: "17:00", dur: 90 }];
+                const eveningSlots = [{ start: "17:30", end: "19:00", dur: 90 }, { start: "19:00", end: "20:30", dur: 90 }];
 
-                // L'Intelligence de priorisation
                 let orderedSlots: any[] = [];
-                if (afternoonMins > 0) {
-                    orderedSlots = [...afternoonSlots, ...eveningSlots, ...morningSlots];
-                } else if (!isMorningPref) {
-                    orderedSlots = [...eveningSlots, ...morningSlots, ...afternoonSlots];
-                } else {
-                    orderedSlots = [...morningSlots, ...eveningSlots, ...afternoonSlots];
-                }
+                if (afternoonMins > 0) orderedSlots = [...afternoonSlots, ...eveningSlots, ...morningSlots];
+                else if (!isMorningPref) orderedSlots = [...eveningSlots, ...morningSlots, ...afternoonSlots];
+                else orderedSlots = [...morningSlots, ...eveningSlots, ...afternoonSlots];
 
                 let tempAvails: any[] = [];
 
@@ -381,13 +475,14 @@ export default function AdminDashboard() {
                             startTime: slot.start,
                             endTime: formatMinutesToTime(eM),
                             isAvailability: true,
-                            actualDate: date
+                            actualDate: date,
+                            numColumns: 1,
+                            columnIndex: 0
                         });
                         minsRemaining -= dur;
                     }
                 });
 
-                // Regroupement des blocs de dispo qui se touchent
                 if (tempAvails.length > 0) {
                     tempAvails.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
                     let merged = [tempAvails[0]];
@@ -396,11 +491,8 @@ export default function AdminDashboard() {
                         let last = merged[merged.length - 1];
                         let curr = tempAvails[i];
                         
-                        if (last.endTime === curr.startTime) {
-                            last.endTime = curr.endTime; // Fusion !
-                        } else {
-                            merged.push(curr);
-                        }
+                        if (last.endTime === curr.startTime) last.endTime = curr.endTime;
+                        else merged.push(curr);
                     }
                     
                     merged.forEach((m, idx) => {
@@ -412,7 +504,7 @@ export default function AdminDashboard() {
         });
     }
 
-    return [...filteredEvents, ...avails];
+    return [...finalEvents, ...avails];
   }, [data, activeDates, selectedTutors, selectedClasses, selectedAvailTutors, searchQuery]);
 
   if (errorMsg) return (
@@ -432,6 +524,18 @@ export default function AdminDashboard() {
   const currentHour = currentTime.getHours();
   const showTimeLine = currentHour >= START_HOUR && currentHour < END_HOUR;
   const timeLineTop = ((currentHour + currentTime.getMinutes() / 60 - START_HOUR) / TOTAL_HOURS) * 100;
+
+  const handlePrev = () => {
+    if (viewMode === 'Mois') setOffset(p => p - 1);
+    else if (viewMode === 'Jour' || viewMode === "Aujourd'hui") setOffset(p => p - 1);
+    else setOffset(p => p - 1);
+  };
+
+  const handleNext = () => {
+    if (viewMode === 'Mois') setOffset(p => p + 1);
+    else if (viewMode === 'Jour' || viewMode === "Aujourd'hui") setOffset(p => p + 1);
+    else setOffset(p => p + 1);
+  };
 
   const handleMiniCalPrevMonth = () => { const n = new Date(miniCalBaseDate); n.setMonth(n.getMonth() - 1); setMiniCalBaseDate(n); };
   const handleMiniCalNextMonth = () => { const n = new Date(miniCalBaseDate); n.setMonth(n.getMonth() + 1); setMiniCalBaseDate(n); };
@@ -453,6 +557,12 @@ export default function AdminDashboard() {
 
   const formatDate = (val: any) => {
     if (val === undefined || val === null || val === "" || val === "null") return "À définir";
+    
+    if (val instanceof Date) {
+        if (isNaN(val.getTime())) return "À définir";
+        return val.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    }
+
     let str = String(val);
     if (str.includes('/')) {
         const parts = str.split('/');
@@ -465,6 +575,8 @@ export default function AdminDashboard() {
     if (!isNaN(d2.getTime())) return d2.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
     return str; 
   };
+
+  const currentViewLabel = viewMode === 'Jour' && offset === 0 ? "Aujourd'hui" : viewMode;
 
   return (
     <div className="flex h-screen bg-white font-sans text-gray-900 overflow-hidden relative">
@@ -515,11 +627,15 @@ export default function AdminDashboard() {
                             const isChecked = selectedTutors.includes(tutor);
                             const dotColor = DOT_COLORS[i % DOT_COLORS.length];
                             
+                            // 🔥 Calcul des statistiques de l'enseignant
                             const tutorCourses = data.schedules.filter((c: any) => extractText(c.tutor) === tutor);
                             const uniqueClassesCount = new Set(tutorCourses.map((c: any) => extractText(c.className))).size;
-                            let tutorHours = 0;
+                            const totalSessions = tutorCourses.length;
+                            let totalHours = 0;
                             tutorCourses.forEach((c: any) => {
-                                if(c.startTime && c.endTime) tutorHours += (timeToMinutes(c.endTime) - timeToMinutes(c.startTime)) / 60;
+                                if (c.startTime && c.endTime) {
+                                    totalHours += (timeToMinutes(c.endTime) - timeToMinutes(c.startTime)) / 60;
+                                }
                             });
 
                             return (
@@ -530,6 +646,33 @@ export default function AdminDashboard() {
                                         <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: dotColor.hex }}></span>
                                         <span className={`text-[13px] truncate transition-colors ${isChecked ? 'text-[#37352f] font-medium' : 'text-[#37352f]'}`}>{tutor}</span>
                                     </label>
+
+                                    {/* 🔥 CASCADE DE STATISTIQUES NOTION-STYLE */}
+                                    {isChecked && (
+                                        <div className="ml-[34px] mr-2 py-1 flex flex-col gap-1.5 animate-in slide-in-from-top-1 duration-200 border-l border-gray-200 pl-3 mb-2">
+                                            <div className="flex items-center justify-between text-[13px] group/stat hover:bg-[#efefed] px-2 py-1.5 rounded transition-colors cursor-default">
+                                                <div className="flex items-center gap-2.5 text-[#91918e] font-medium">
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                                                    Classes actives
+                                                </div>
+                                                <span className="font-medium text-[#37352f]">{uniqueClassesCount}</span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-[13px] group/stat hover:bg-[#efefed] px-2 py-1.5 rounded transition-colors cursor-default">
+                                                <div className="flex items-center gap-2.5 text-[#91918e] font-medium">
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                                                    Séances / sem.
+                                                </div>
+                                                <span className="font-medium text-[#37352f]">{totalSessions}</span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-[13px] group/stat hover:bg-[#efefed] px-2 py-1.5 rounded transition-colors cursor-default">
+                                                <div className="flex items-center gap-2.5 text-[#91918e] font-medium">
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                                    Heures / sem.
+                                                </div>
+                                                <span className="font-medium text-[#37352f]">{totalHours.toFixed(1)}h</span>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}
@@ -592,35 +735,63 @@ export default function AdminDashboard() {
             </div>
             <div className="flex gap-4 items-center">
                 <div className="flex gap-2 text-[13px] font-medium items-center">
-                    <div className="relative">
-                        <button onClick={() => setViewMenuOpen(!viewMenuOpen)} className="flex items-center gap-2 text-gray-700 bg-white px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50 transition-colors shadow-sm">{viewMode}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button>
-                        {viewMenuOpen && (
-                            <>
-                                <div className="fixed inset-0 z-40" onClick={() => setViewMenuOpen(false)}></div>
-                                <div className="absolute top-full mt-2 right-0 md:left-0 w-56 bg-white rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-gray-200 py-1.5 z-50 font-sans text-[13px] animate-in fade-in zoom-in-95 duration-100">
-                                    <MenuItem label="Jour" shortcut="1 ou D" isSelected={viewMode === 'Jour'} onClick={() => {setViewMode('Jour'); setOffset(0); setViewMenuOpen(false);}} />
-                                    <MenuItem label="Semaine" shortcut="0 ou W" isSelected={viewMode === 'Semaine'} onClick={() => {setViewMode('Semaine'); setOffset(0); setViewMenuOpen(false);}} />
-                                    <MenuItem label="Mois" shortcut="M" isSelected={viewMode === 'Mois'} onClick={() => {setViewMode('Mois'); setOffset(0); setViewMenuOpen(false);}} />
-                                    <div className="h-px bg-gray-200 my-1 mx-3"></div>
-                                    <div className="relative group" onMouseEnter={() => setNumDaysHovered(true)} onMouseLeave={() => setNumDaysHovered(false)}>
-                                        <MenuItem label="Nombre de jours" hasSubmenu={true} isSelected={viewMode.includes('jours')} onClick={() => {}} />
-                                        {numDaysHovered && <div className="absolute top-0 right-full h-full w-2 bg-transparent z-50"></div>}
-                                        {numDaysHovered && (
-                                            <div className="absolute top-0 right-full mr-1 w-48 bg-white rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-gray-200 py-1.5 animate-in fade-in slide-in-from-right-2 duration-100 z-50">
-                                                {[2,3,4,5,6,7,8,9].map(n => <MenuItem key={n} label={`${n} jours`} shortcut={`${n}`} isSelected={viewMode === `${n} jours`} onClick={() => {setViewMode(`${n} jours`); setOffset(0); setViewMenuOpen(false); setNumDaysHovered(false);}} />)}
-                                                <div className="h-px bg-gray-200 my-1 mx-3"></div>
-                                                <MenuItem label="Autre..." isSelected={false} onClick={() => { setViewMenuOpen(false); setNumDaysHovered(false); }} />
+                    
+                    {/* 🔥 SÉLECTEUR DE VUE STYLE NOTION AVEC FLÈCHES */}
+                    <div className="relative flex items-center gap-2">
+                        <div className="relative">
+                            <button 
+                                onClick={() => setViewMenuOpen(!viewMenuOpen)}
+                                className="flex items-center gap-2 text-gray-700 bg-white px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50 transition-colors shadow-sm"
+                            >
+                                {currentViewLabel}
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                            </button>
+                            
+                            {viewMenuOpen && (
+                                <>
+                                    <div className="fixed inset-0 z-40" onClick={() => {setViewMenuOpen(false); setNumDaysExpanded(false);}}></div>
+                                    <div className="absolute top-full mt-2 right-0 md:left-0 w-56 bg-white rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-gray-200 py-1.5 z-50 font-sans text-[13px] animate-in fade-in zoom-in-95 duration-100">
+                                        <MenuItem label="Aujourd'hui" shortcut="T" isSelected={viewMode === 'Jour' && offset === 0} onClick={() => {setViewMode('Jour'); setOffset(0); setViewMenuOpen(false); setNumDaysExpanded(false);}} />
+                                        <MenuItem label="Semaine" shortcut="W" isSelected={viewMode === 'Semaine'} onClick={() => {setViewMode('Semaine'); setOffset(0); setViewMenuOpen(false); setNumDaysExpanded(false);}} />
+                                        <MenuItem label="Mois" shortcut="M" isSelected={viewMode === 'Mois'} onClick={() => {setViewMode('Mois'); setOffset(0); setViewMenuOpen(false); setNumDaysExpanded(false);}} />
+                                        
+                                        <div className="h-px bg-gray-200 my-1 mx-3"></div>
+                                        
+                                        <MenuItem 
+                                            label="Nombre de jours" 
+                                            hasSubmenu={!numDaysExpanded} 
+                                            isExpanded={numDaysExpanded}
+                                            isSelected={viewMode.includes('jours')} 
+                                            onClick={() => setNumDaysExpanded(!numDaysExpanded)} 
+                                        />
+                                        
+                                        {numDaysExpanded && (
+                                            <div className="bg-gray-50/50 py-1 border-y border-gray-100 mt-1 animate-in slide-in-from-top-1 duration-150">
+                                                {[2,3,4,5,6,7,8,9].map(n => (
+                                                    <div 
+                                                        key={n}
+                                                        onClick={() => {setViewMode(`${n} jours`); setOffset(0); setViewMenuOpen(false); setNumDaysExpanded(false);}}
+                                                        className="flex items-center justify-between px-8 py-1.5 hover:bg-gray-100 cursor-pointer text-[13px] text-gray-600 transition-colors"
+                                                    >
+                                                        <span>{n} jours</span>
+                                                        {viewMode === `${n} jours` && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>}
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                    <button onClick={() => setOffset(0)} className="text-gray-700 bg-white px-3 py-1.5 rounded border border-gray-200 hover:bg-gray-50 transition-colors shadow-sm">Aujourd'hui</button>
-                    <div className="flex items-center text-gray-700 bg-white rounded border border-gray-200 overflow-hidden shadow-sm">
-                        <button onClick={() => setOffset(p => p - 1)} className="px-2 py-1.5 hover:bg-gray-100 border-r border-gray-200 transition-colors"><ChevronRight className="w-3.5 h-3.5 rotate-180" /></button>
-                        <button onClick={() => setOffset(p => p + 1)} className="px-2 py-1.5 hover:bg-gray-100 transition-colors"><ChevronRight className="w-3.5 h-3.5" /></button>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="flex items-center text-gray-700 bg-white rounded border border-gray-200 overflow-hidden shadow-sm">
+                            <button onClick={handlePrev} className="px-2 py-1.5 hover:bg-gray-100 border-r border-gray-200 transition-colors">
+                                <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+                            </button>
+                            <button onClick={handleNext} className="px-2 py-1.5 hover:bg-gray-100 transition-colors">
+                                <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -651,9 +822,9 @@ export default function AdminDashboard() {
                                             return (
                                                 <div key={course.instanceId || course.id} onClick={() => setSelectedCourse(course)} className="group text-[11px] px-1 py-[2px] rounded-[4px] cursor-pointer transition-colors hover:bg-gray-100 flex items-center gap-1.5">
                                                     <div className="w-[3px] h-3.5 rounded-full shrink-0" style={{ backgroundColor: hexColor }}></div>
-                                                    {course.isConflicting && <span className="text-[10px] shrink-0">⚠️</span>}
+                                                    {course.isConflicting && !course.isExam && <span className="text-[10px] shrink-0">⚠️</span>}
                                                     <span className="font-semibold shrink-0" style={{ color: hexColor, opacity: 0.85 }}>{formatMonthTime(course.startTime)}</span>
-                                                    <span className="font-semibold text-[#37352f] truncate">{course.classNameStr}</span>
+                                                    <span className="font-semibold text-[#37352f] truncate">{course.classNameStr} {course.isExam && "— Examen"}</span>
                                                     <span className="text-[#91918e] truncate shrink-0 ml-1">{course.tutorStr}</span>
                                                 </div>
                                             );
@@ -698,16 +869,20 @@ export default function AdminDashboard() {
                                     return (
                                         <div key={index} className={`flex-1 border-r border-gray-100 last:border-r-0 relative ${isActualToday ? "bg-[#FFF0F0]/20" : ""}`}>
                                             {isActualToday && showTimeLine && offset === 0 && viewMode === 'Semaine' && <div className="absolute w-2 h-2 rounded-full bg-[#EB5757] z-20 -ml-1" style={{ top: `calc(${timeLineTop}% - 4px)` }} />}
+                                            
                                             {processedSchedules.filter((c: any) => c.actualDate.getTime() === date.getTime()).map((course: any) => {
                                                 const isAvail = course.isAvailability;
+                                                const widthPct = 100 / (course.numColumns || 1);
+                                                const leftPct = (course.columnIndex || 0) * widthPct;
+
                                                 return (
                                                     <div 
                                                         key={course.instanceId || course.id} 
                                                         onClick={() => !isAvail && setSelectedCourse(course)} 
-                                                        style={getPositionStyles(course.startTime, course.endTime, isAvail)} 
-                                                        className={`absolute inset-x-[2px] p-2 rounded-[4px] overflow-hidden shadow-sm z-20 transition-transform flex flex-col ${isAvail ? 'cursor-default opacity-90' : `border-l-[4px] cursor-pointer hover:scale-[1.02] ${course.isConflicting ? "bg-[#FFF0F0] border-[#EB5757] text-[#EB5757] ring-1 ring-[#EB5757]" : (COLORS[course.typeStr] || COLORS["Default"])}`}`}
+                                                        style={{ ...getPositionStyles(course.startTime, course.endTime, isAvail), left: `${leftPct}%`, width: `calc(${widthPct}% - 2px)` }} 
+                                                        className={`absolute p-2 rounded-[4px] overflow-hidden shadow-sm z-20 transition-transform flex flex-col ${isAvail ? 'cursor-default opacity-90' : `border-l-[4px] cursor-pointer hover:scale-[1.02] ${course.isConflicting && !course.isExam ? "bg-[#FFF0F0] border-[#EB5757] text-[#EB5757] ring-1 ring-[#EB5757]" : (COLORS[course.typeStr] || COLORS["Default"])}`}`}
                                                     >
-                                                        <div className="font-semibold text-[12px] truncate leading-tight mb-0.5 flex items-center gap-1">{course.isConflicting && <span>⚠️</span>}{course.classNameStr}</div>
+                                                        <div className="font-semibold text-[12px] truncate leading-tight mb-0.5 flex items-center gap-1">{course.isConflicting && !course.isExam && <span>⚠️</span>}{course.classNameStr} {course.isExam && "— Examen"}</div>
                                                         <div className="text-[11px] opacity-90 truncate font-medium">{course.startTime} - {course.endTime}</div>
                                                         {!isAvail && <div className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] opacity-80 font-medium truncate"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>{course.tutorStr}</div>}
                                                     </div>
@@ -731,12 +906,12 @@ export default function AdminDashboard() {
             <div className="fixed top-0 right-0 h-full w-full md:w-[450px] bg-white shadow-2xl z-[70] transform transition-transform animate-in slide-in-from-right duration-300 border-l border-[#e5e5e5] flex flex-col font-sans">
                 <div className="h-12 flex items-center justify-between px-3 shrink-0 border-b border-[#e5e5e5]">
                     <button onClick={() => setSelectedCourse(null)} className="p-1.5 hover:bg-[#efefed] rounded text-[#91918e] transition-colors"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-                    {selectedCourse.isConflicting && <div className="text-[12px] font-medium text-[#EB5757] flex items-center gap-1.5 bg-[#FFF0F0] px-3 py-1 rounded-full border border-[#EB5757]/20">⚠️ Conflit d'horaire</div>}
+                    {selectedCourse.isConflicting && !selectedCourse.isExam && <div className="text-[12px] font-medium text-[#EB5757] flex items-center gap-1.5 bg-[#FFF0F0] px-3 py-1 rounded-full border border-[#EB5757]/20">⚠️ Conflit d'horaire</div>}
                 </div>
                 <div className="px-10 pb-10 flex-1 overflow-y-auto custom-scrollbar">
-                    <h3 className="text-[32px] font-bold text-[#37352f] mb-6 mt-4 leading-tight flex items-center gap-3">📄 {selectedCourse.classNameStr}</h3>
+                    <h3 className="text-[32px] font-bold text-[#37352f] mb-6 mt-4 leading-tight flex items-center gap-3">📄 {selectedCourse.classNameStr} {selectedCourse.isExam && "(Examen)"}</h3>
                     
-                    {selectedCourse.isConflicting && (
+                    {selectedCourse.isConflicting && !selectedCourse.isExam && (
                       <div className="mb-6 bg-[#fffbe6] border border-[#e6c170] rounded-lg p-4 flex gap-3 text-[#7d6023] animate-in fade-in duration-300">
                         <span className="text-2xl mt-0.5">⚠️</span>
                         <div><p className="font-semibold text-[14px]">Attention : Conflit d'horaire détecté</p><p className="text-[13px] mt-0.5 opacity-90">Cette séance chevauche une autre séance sur ce même créneau horaire. Ajustez les horaires pour résoudre le conflit.</p></div>
@@ -745,11 +920,12 @@ export default function AdminDashboard() {
 
                     <div className="flex flex-col gap-2 mb-8 text-[14px]">
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>Enseignant</div><div className="text-[#37352f] font-medium">{selectedCourse.tutorStr}</div></div>
-                        <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Horaire</div><div className={`text-[#37352f] ${selectedCourse.isConflicting ? "text-[#EB5757] font-bold" : ""}`}>{selectedCourse.startTime} — {selectedCourse.endTime}</div></div>
+                        <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Horaire</div><div className={`text-[#37352f] ${selectedCourse.isConflicting && !selectedCourse.isExam ? "text-[#EB5757] font-bold" : ""}`}>{selectedCourse.startTime} — {selectedCourse.endTime}</div></div>
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Effectif</div><div className="text-[#37352f]">{selectedCourse.studentCount} étudiant{selectedCourse.studentCount > 1 ? 's' : ''}</div></div>
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>Type</div><div className="flex"><span className={`text-[12px] px-2 py-0.5 rounded-sm font-medium border ${COLORS[selectedCourse.typeStr] || COLORS["Default"]}`}>{selectedCourse.typeStr}</span></div></div>
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>Date Examen</div><div className="text-[#37352f]">{formatDate(selectedCourse.examDateStr)}</div></div>
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>Fin de session</div><div className="text-[#37352f]">{formatDate(selectedCourse.endDateStr)}</div></div>
+                        
                         <div className="flex items-center min-h-[34px]"><div className="w-[160px] text-[#91918e] flex items-center gap-2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>Séances restantes</div><div className="text-[#37352f]">{getRemainingSessions(selectedCourse.endDateStr)} séance(s)</div></div>
                     </div>
                     <div className="w-full h-px bg-[#ededed] mb-8"></div>
