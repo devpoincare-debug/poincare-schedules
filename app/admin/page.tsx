@@ -175,8 +175,7 @@ export default function AdminDashboard() {
   const [viewMode, setViewMode] = useState('Semaine');
   const [offset, setOffset] = useState(0);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const [numDaysHovered, setNumDaysHovered] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [numDaysExpanded, setNumDaysExpanded] = useState(false);  const [searchQuery, setSearchQuery] = useState('');
   const [isSearchActive, setIsSearchActive] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   
